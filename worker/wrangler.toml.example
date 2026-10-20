@@ -2,6 +2,10 @@ name = "sbsm-worker"
 main = "src/index.ts"
 compatibility_date = "2025-10-11"
 
+[assets]
+directory = "../frontend/out"
+run_worker_first = ["/api/*", "/verify"]
+
 [[d1_databases]]
 binding = "DB"
 database_name = "sbsm"
@@ -9,6 +13,6 @@ database_id = "sbsm"
 migrations_dir = "../migrations"
 
 [vars]
-ADMIN_USERNAME = "hanwn"
-# SHA-256 hash of your admin password in hex (e.g., echo -n 'password' | shasum -a 256)
-ADMIN_PASSWORD_HASH = "a099f7d4593ed4c58fe22b46045c52326681eb3f5f7307a19edf0d9bdfaca5c7"
+ADMIN_USERNAME = "admin"
+# Set ADMIN_PASSWORD_HASH with `wrangler secret put` for production,
+# or in an ignored .dev.vars file for local development.

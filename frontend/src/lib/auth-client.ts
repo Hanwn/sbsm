@@ -37,15 +37,20 @@ function readCookie(key: string): string | null {
 }
 
 export function getAuthCookies(): AuthCookies {
+  const sameOriginHost =
+    process.env.NEXT_PUBLIC_SBSM_SAME_ORIGIN === 'true' && typeof window !== 'undefined'
+      ? window.location.origin
+      : '';
   return {
-    host: readCookie(COOKIE_HOST) ?? '',
+    host: readCookie(COOKIE_HOST) || sameOriginHost,
     username: readCookie(COOKIE_USERNAME) ?? '',
     password: readCookie(COOKIE_PASSWORD) ?? '',
   };
 }
 
 export function hasAuthCookies(): boolean {
-  const values = AUTH_COOKIE_KEYS.map((key) => readCookie(key));
+  const values = AUTH_COOKIE_KEYS.map((key) =>
+    key === COOKIE_HOST ? getAuthCookies().host : readCookie(key));
   return values.every((value) => value && value.length > 0);
 }
 

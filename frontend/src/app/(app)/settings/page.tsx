@@ -92,7 +92,10 @@ export default function SettingsPage() {
 
   function handleLogout() {
     clearAuthCookies();
-    router.push("/login");
+    setUsername("");
+    setPassword("");
+    setCurrentPassword("");
+    setAlert({ type: "success", title: "Logged out", message: "Saved credentials were cleared." });
   }
 
   return (

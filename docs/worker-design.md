@@ -102,7 +102,7 @@ The base template is provided by the user and should match the sing-box version 
 
 ## Implementation Notes
 
-- Admin credentials are injected via Wrangler `vars` (`ADMIN_USERNAME` and `ADMIN_PASSWORD_HASH`, SHA-256 hex of the password). Without them the Worker refuses authentication.
+- `ADMIN_USERNAME` is a Wrangler var. `ADMIN_PASSWORD_HASH` is a Wrangler secret (SHA-256 hex of the password); local development uses the ignored `.dev.vars` file. Without both bindings the Worker refuses authentication.
 - Share tokens are UUID strings; regenerating a token invalidates previous share URLs immediately.
 - All IDs remain UUIDs so you can safely share `config_id`/`share_token` combinations with friends.
 - Utilities for HTTP handling, Basic Auth, and D1 helpers live under `worker/src/lib` and `worker/src/db`, keeping route modules concise.

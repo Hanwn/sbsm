@@ -30,21 +30,34 @@
 ```bash
 cd worker
 npm install
-cp wrangler.toml.example wrangler.toml
-# 填入你的 Cloudflare account_id、D1 database_id 及相关绑定配置
-npm run migrate --remote   # 远程执行数据库迁移
+npm --prefix ../frontend install
+cp wrangler.toml.example wrangler.toml  # 仅首次安装时执行
 ```
+
+在 `worker/wrangler.toml` 中设置 D1 `database_id` 和 `ADMIN_USERNAME`。如果已有本地配置，保留原文件，并确认其中包含：
+
+```toml
+[assets]
+directory = "../frontend/out"
+run_worker_first = ["/api/*", "/verify"]
+```
+
+`worker/wrangler.toml` 不会提交到 Git。不要把 `ADMIN_PASSWORD_HASH` 写进去。此前提交的哈希仍在 Git 历史中，因此要使用全新、未在别处使用的密码。
 
 ### 3. 部署到 Cloudflare
 
 ```bash
+npm run migrate -- --remote  # 仅新数据库或存在待执行迁移时运行
 npm run deploy
+python3 -c 'import getpass, hashlib; print(hashlib.sha256(getpass.getpass("New admin password: ").encode()).hexdigest())'
+npx wrangler secret put ADMIN_PASSWORD_HASH
 ```
+
+`npm run deploy` 会先构建前端，再与 Worker 一起发布。Python 命令会提示输入新密码；将它输出的**哈希**粘贴到 Wrangler 的 Secret 提示中，不要粘贴密码本身。之后只更新代码时，运行 `npm run deploy` 即可；改密码时再更新 Secret。
 
 ### 4. 访问管理面板
 
-你可以直接使用官方托管版本：
-👉 **[sbsm.pages.dev](https://sbsm.pages.dev/)**
+打开部署后的 Worker 地址，管理面板与 API 使用同一个域名。
 
 或者选择自行部署前端：
 
@@ -54,10 +67,9 @@ npm run deploy
 cd ../frontend
 npm install
 npm run build
-npm run export     # 生成静态文件到 /out 目录
 ```
 
-将 `out/` 文件夹内容上传至任意静态托管平台（如 Cloudflare Pages、Vercel）。
+将 `out/` 文件夹内容上传至静态托管平台（如 Cloudflare Pages）。
 然后访问你自己的部署地址，使用配置好的管理员账号登录，并连接到你的 Worker 接口。
 
 ---

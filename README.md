@@ -36,21 +36,34 @@ Make sure you have:
 ```bash
 cd worker
 npm install
-cp wrangler.toml.example wrangler.toml
-# Fill in your Cloudflare account_id, D1 database_id, and bindings
-npm run migrate -- --remote   # Apply migrations to the remote D1 database
+npm --prefix ../frontend install
+cp wrangler.toml.example wrangler.toml  # Only when setting up a new installation
 ```
+
+Set the D1 `database_id` and `ADMIN_USERNAME` in `worker/wrangler.toml`. For an existing installation, keep your current local config and make sure it includes:
+
+```toml
+[assets]
+directory = "../frontend/out"
+run_worker_first = ["/api/*", "/verify"]
+```
+
+`worker/wrangler.toml` is ignored by Git. Do not put `ADMIN_PASSWORD_HASH` in it. The new password must be unique; the previously committed hash remains visible in Git history.
 
 ### 3. Deploy to Cloudflare
 
 ```bash
+npm run migrate -- --remote  # Only for a fresh database or pending migrations
 npm run deploy
+python3 -c 'import getpass, hashlib; print(hashlib.sha256(getpass.getpass("New admin password: ").encode()).hexdigest())'
+npx wrangler secret put ADMIN_PASSWORD_HASH
 ```
+
+`npm run deploy` builds the frontend and publishes it with the Worker. Paste the hash printed by Python into the Wrangler secret prompt, not the password itself. Rotate to a new password if the previous hash was published. Future code deployments only need `npm run deploy`; repeat the secret step when changing the password.
 
 ### 4. Access the Dashboard
 
-Use the hosted dashboard at
-👉 **[sbsm.pages.dev](https://sbsm.pages.dev/)**
+Open your deployed Worker URL. The dashboard and API are served from the same origin.
 
 Or, if you prefer to self-host the frontend:
 
@@ -60,10 +73,9 @@ Or, if you prefer to self-host the frontend:
 cd ../frontend
 npm install
 npm run build
-npm run export     # Static output under /out
 ```
 
-Upload the contents of `out/` to your hosting platform (e.g., Cloudflare Pages, Vercel).
+Upload the contents of `out/` to your hosting platform (e.g., Cloudflare Pages).
 Then visit your deployed dashboard, log in with your configured credentials, and connect it to the Worker endpoint.
 
 ---

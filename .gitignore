@@ -23,6 +23,8 @@ cache.db
 # Environment & secrets
 .env
 .env.*
+.dev.vars*
+**/.dev.vars*
 
 # Build caches
 dist/

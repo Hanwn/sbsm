@@ -4,25 +4,25 @@
 
 - Install [Wrangler](https://developers.cloudflare.com/workers/wrangler/install-and-update/) (`npm install` inside `worker/`).
 - Create a Cloudflare D1 database and note the `database_id`.
-- Edit `worker/wrangler.toml`:
-  - Set `database_id` under `[[d1_databases]]`.
-  - Provide `ADMIN_USERNAME` (plain text) and `ADMIN_PASSWORD_HASH` (SHA-256 hex of your admin password).
+- Copy `worker/wrangler.toml.example` to the ignored `worker/wrangler.toml` and set the D1 `database_id`.
+- Set `ADMIN_USERNAME` in `worker/wrangler.toml`. Use a long, unique admin password.
 
-To hash a password locally:
+Generate its SHA-256 hash without putting the password in shell history:
 
 ```sh
-echo -n 'your-password' | shasum -a 256
+python3 -c 'import getpass, hashlib; print(hashlib.sha256(getpass.getpass("New admin password: ").encode()).hexdigest())'
 ```
 
-Use the resulting hex string (without the trailing `-`).
+For local development, put `ADMIN_PASSWORD_HASH="<generated hash>"` in the ignored `worker/.dev.vars` file. For a deployed Worker, run `npx wrangler secret put ADMIN_PASSWORD_HASH` from `worker/` after deployment and paste the generated hash when prompted. Keep this binding out of `wrangler.toml` so deployment does not overwrite the secret. A hash already published in Git history remains exposed even after removing it from the current file; rotate the deployed admin password to a different, unique value.
 
 ## Local Development
 
 ```sh
 cd worker
 npm install
+npm --prefix ../frontend install
 npm run migrate           # apply all pending migrations to local D1
-npm run dev -- --local    # start the SBSM dev server with local bindings
+npm run dev               # build the dashboard and start the Worker with local bindings
 ```
 
 ## Deploy
@@ -31,7 +31,10 @@ npm run dev -- --local    # start the SBSM dev server with local bindings
 cd worker
 npm run migrate -- --remote  # apply migrations to the remote D1 database
 npm run deploy
+npx wrangler secret put ADMIN_PASSWORD_HASH  # paste the new hash when prompted
 ```
+
+The Worker serves the exported dashboard and the API on the same origin. Open the deployed Worker URL to access the dashboard. `npm run deploy` builds `frontend/out` before publishing, so frontend dependencies must be installed first.
 
 ## Authentication
 
