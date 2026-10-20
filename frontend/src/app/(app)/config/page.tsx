@@ -71,8 +71,6 @@ type GroupSummary = {
   tag_names?: string[];
 };
 
-type LinkSummary = { tag: string | null };
-
 type ConfigSummary = {
   id: string;
   base_config_id: string;
@@ -97,7 +95,6 @@ export default function ConfigsPage() {
   const [configs, setConfigs] = useState<ConfigSummary[]>([]);
   const [baseConfigs, setBaseConfigs] = useState<BaseConfigSummary[]>([]);
   const [groups, setGroups] = useState<GroupSummary[]>([]);
-  const [links, setLinks] = useState<LinkSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [alert, setAlert] = useState<AlertState>(null);
 
@@ -126,7 +123,6 @@ export default function ConfigsPage() {
   const [editDescription, setEditDescription] = useState("");
   const [editBaseId, setEditBaseId] = useState<string>("");
   const [editGroupSelection, setEditGroupSelection] = useState<Set<string>>(new Set());
-  const [editTagSelection, setEditTagSelection] = useState<Set<string>>(new Set());
   const [editSelectors, setEditSelectors] = useState("");
   const [editSubmitting, setEditSubmitting] = useState(false);
 
@@ -147,32 +143,16 @@ export default function ConfigsPage() {
     return map;
   }, [groups]);
 
-  const availableTags = useMemo(
-    () =>
-      [
-        ...new Set(
-          [
-            ...links.map((link) => link.tag),
-            ...groups.map((group) => group.tag),
-            ...groups.flatMap((group) => group.tag_names ?? []),
-            ...configs.flatMap((config) => config.tag_names ?? []),
-          ].filter((tag): tag is string => Boolean(tag)),
-        ),
-      ].sort((a, b) => a.localeCompare(b)),
-    [links, groups, configs],
-  );
-
   useEffect(() => {
     let cancelled = false;
     async function load() {
       setLoading(true);
       setAlert(null);
       try {
-        const [configData, baseData, groupData, linkData] = await Promise.all([
+        const [configData, baseData, groupData] = await Promise.all([
           apiFetch<ConfigSummary[]>("/api/configs"),
           apiFetch<BaseConfigSummary[]>("/api/base-configs"),
           apiFetch<GroupSummary[]>("/api/groups"),
-          apiFetch<LinkSummary[]>("/api/links"),
         ]);
         if (!cancelled) {
           setConfigs(
@@ -192,7 +172,6 @@ export default function ConfigsPage() {
               tag_names: item.tag_names ?? [],
             })),
           );
-          setLinks(linkData);
         }
       } catch (error) {
         console.error("Failed to load configs", error);
@@ -227,15 +206,6 @@ export default function ConfigsPage() {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
-      return next;
-    });
-  }
-
-  function toggleEditTag(tag: string) {
-    setEditTagSelection((previous) => {
-      const next = new Set(previous);
-      if (next.has(tag)) next.delete(tag);
-      else next.add(tag);
       return next;
     });
   }
@@ -373,7 +343,6 @@ export default function ConfigsPage() {
     setEditDescription(config.description ?? "");
     setEditBaseId(config.base_config_id);
     setEditGroupSelection(new Set(config.group_ids ?? []));
-    setEditTagSelection(new Set(config.tag_names ?? []));
     setEditSelectors(config.selector_tags.join(", "));
   }
 
@@ -459,7 +428,6 @@ export default function ConfigsPage() {
         description: editDescription.trim() || undefined,
         baseConfigId: editBaseId,
         groupIds: Array.from(editGroupSelection),
-        tagNames: Array.from(editTagSelection),
         selectorTags: normalizeSelectors(editSelectors),
       };
       const updated = await apiFetch<ConfigSummary>(`/api/configs/${editTarget.id}`, {
@@ -474,7 +442,7 @@ export default function ConfigsPage() {
         ...updated,
         base_config_name: baseName,
         group_ids: updated.group_ids ?? Array.from(editGroupSelection),
-        tag_names: updated.tag_names ?? Array.from(editTagSelection),
+        tag_names: updated.tag_names ?? editTarget.tag_names,
       };
       setConfigs((prev) =>
         prev.map((config) => (config.id === updatedConfig.id ? updatedConfig : config)),
@@ -901,30 +869,6 @@ export default function ConfigsPage() {
                         </label>
                       ))}
                     </div>
-                  )}
-                </div>
-              </div>
-              <div className="grid gap-2">
-                <Label>Include tags directly</Label>
-                <p className="text-xs text-muted-foreground">
-                  VPN nodes and subscription groups with these tags are included automatically.
-                </p>
-                <div className="max-h-32 overflow-y-auto rounded-lg border p-3">
-                  {availableTags.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">
-                      No VPN node or subscription group tags available.
-                    </p>
-                  ) : (
-                    availableTags.map((tag) => (
-                      <label key={tag} className="flex items-center gap-2 py-1 text-sm">
-                        <Checkbox
-                          checked={editTagSelection.has(tag)}
-                          onCheckedChange={() => toggleEditTag(tag)}
-                          disabled={editSubmitting}
-                        />
-                        <span>{tag}</span>
-                      </label>
-                    ))
                   )}
                 </div>
               </div>
