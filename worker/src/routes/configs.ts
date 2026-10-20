@@ -1,6 +1,6 @@
 import { jsonResponse, errorResponse, readJsonBody, CORS_HEADERS } from '../lib/http';
 import { requireAuth } from '../lib/auth';
-import { mergeGeneratedOutbounds, parseBaseConfig, parseSelectorTags } from '../lib/config';
+import { mergeGeneratedOutbounds, parseBaseConfig, parseSelectorRules, parseSelectorTags } from '../lib/config';
 import type { AuthContext, Env, RouteDefinition } from '../lib/context';
 import type { SbConfigRow, VpnLinkRow } from '../models';
 import { fetchLinksByIds } from '../db/links';
@@ -673,16 +673,13 @@ async function handleGetConfig(
 
   const overrideSelectorTags = parseSelectorTags(configRow.selector_tags);
   const baseSelectorTags = parseSelectorTags(baseConfigRow.selector_tags);
+  const selectorRules = overrideSelectorTags.length > 0 ? [] : parseSelectorRules(baseConfigRow.selector_tags);
   const selectorTags = overrideSelectorTags.length > 0 ? overrideSelectorTags : baseSelectorTags;
   const renderConfig = parseBaseConfig(baseConfigRow.config_json);
 
   const allLinks = await collectConfigLinks(env, configId);
-  if (allLinks.length === 0) {
-    return jsonResponse(renderConfig);
-  }
-
-  const outbounds = await convertLinksToOutbounds(allLinks);
-  mergeGeneratedOutbounds(renderConfig, outbounds, selectorTags);
+  const outbounds = allLinks.length > 0 ? await convertLinksToOutbounds(allLinks) : [];
+  mergeGeneratedOutbounds(renderConfig, outbounds, selectorTags, selectorRules);
   return jsonResponse(renderConfig);
 }
 

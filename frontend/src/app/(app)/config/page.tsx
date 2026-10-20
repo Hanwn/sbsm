@@ -56,7 +56,12 @@ import { getAuthCookies } from "@/lib/auth-client";
 type BaseConfigSummary = {
   id: string;
   name: string;
+  version: string | null;
 };
+
+function baseConfigLabel(base: BaseConfigSummary): string {
+  return `${base.name} · ${base.version ? `sing-box ${base.version}` : "version unspecified"}`;
+}
 
 type GroupSummary = {
   id: string;
@@ -101,7 +106,6 @@ export default function ConfigsPage() {
   const [createDescription, setCreateDescription] = useState("");
   const [createBaseId, setCreateBaseId] = useState<string>("");
   const [createGroupSelection, setCreateGroupSelection] = useState<Set<string>>(new Set());
-  const [createTagSelection, setCreateTagSelection] = useState<Set<string>>(new Set());
   const [createSelectors, setCreateSelectors] = useState("");
   const [createShareEnabled, setCreateShareEnabled] = useState(false);
   const [createShareToken, setCreateShareToken] = useState("");
@@ -111,6 +115,11 @@ export default function ConfigsPage() {
   const [shareEnabled, setShareEnabled] = useState(false);
   const [shareToken, setShareToken] = useState("");
   const [shareSubmitting, setShareSubmitting] = useState(false);
+  const [shareError, setShareError] = useState("");
+  const [viewTarget, setViewTarget] = useState<ConfigSummary | null>(null);
+  const [viewContent, setViewContent] = useState("");
+  const [viewLoading, setViewLoading] = useState(false);
+  const [viewError, setViewError] = useState("");
 
   const [editTarget, setEditTarget] = useState<ConfigSummary | null>(null);
   const [editName, setEditName] = useState("");
@@ -173,7 +182,7 @@ export default function ConfigsPage() {
               tag_names: config.tag_names ?? [],
             })),
           );
-          setBaseConfigs(baseData.map((item) => ({ id: item.id, name: item.name })));
+          setBaseConfigs(baseData.map((item) => ({ id: item.id, name: item.name, version: item.version ?? null })));
           setGroups(
             groupData.map((item) => ({
               id: item.id,
@@ -222,9 +231,8 @@ export default function ConfigsPage() {
     });
   }
 
-  function toggleTag(tag: string, editing: boolean) {
-    const setter = editing ? setEditTagSelection : setCreateTagSelection;
-    setter((previous) => {
+  function toggleEditTag(tag: string) {
+    setEditTagSelection((previous) => {
       const next = new Set(previous);
       if (next.has(tag)) next.delete(tag);
       else next.add(tag);
@@ -256,7 +264,6 @@ export default function ConfigsPage() {
         description: createDescription.trim() || undefined,
         baseConfigId: createBaseId,
         groupIds: Array.from(createGroupSelection),
-        tagNames: Array.from(createTagSelection),
         selectorTags: normalizeSelectors(createSelectors),
         shareEnabled: createShareEnabled,
         shareToken: createShareToken.trim() || undefined,
@@ -273,7 +280,7 @@ export default function ConfigsPage() {
         ...created,
         base_config_name: baseName,
         group_ids: created.group_ids ?? Array.from(createGroupSelection),
-        tag_names: created.tag_names ?? Array.from(createTagSelection),
+        tag_names: created.tag_names ?? [],
       };
       setConfigs((prev) => [createdConfig, ...prev]);
       setAlert({
@@ -300,14 +307,54 @@ export default function ConfigsPage() {
     setCreateDescription("");
     setCreateBaseId("");
     setCreateGroupSelection(new Set());
-    setCreateTagSelection(new Set());
     setCreateSelectors("");
     setCreateShareEnabled(false);
     setCreateShareToken("");
   }
 
-  function openShareDialog(config: ConfigSummary) {
+  async function openShareDialog(config: ConfigSummary) {
     setShareTarget(config);
+    setShareError("");
+    if (config.share_enabled && config.share_token) return;
+    setShareSubmitting(true);
+    try {
+      const response = await apiFetch<{ shareEnabled: boolean; shareToken: string | null }>(
+        `/api/configs/${config.id}/share`,
+        { method: "POST", body: JSON.stringify({ shareEnabled: true }) },
+      );
+      setConfigs((prev) => prev.map((item) => item.id === config.id
+        ? { ...item, share_enabled: response.shareEnabled, share_token: response.shareToken }
+        : item));
+      setShareTarget((prev) => prev?.id === config.id
+        ? { ...prev, share_enabled: response.shareEnabled, share_token: response.shareToken }
+        : prev);
+      setShareEnabled(response.shareEnabled);
+      setShareToken(response.shareToken ?? "");
+    } catch (error) {
+      setShareError(error instanceof Error ? error.message : "Unexpected error creating the share link.");
+      setAlert({
+        type: "error",
+        title: "Failed to create share link",
+        message: error instanceof Error ? error.message : "Unexpected error creating the share link.",
+      });
+    } finally {
+      setShareSubmitting(false);
+    }
+  }
+
+  async function openViewDialog(config: ConfigSummary) {
+    setViewTarget(config);
+    setViewContent("");
+    setViewError("");
+    setViewLoading(true);
+    try {
+      const rendered = await apiFetch<unknown>(`/api/config?config_id=${encodeURIComponent(config.id)}`);
+      setViewContent(JSON.stringify(rendered, null, 2));
+    } catch (error) {
+      setViewError(error instanceof Error ? error.message : "Failed to load the rendered config.");
+    } finally {
+      setViewLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -382,6 +429,7 @@ export default function ConfigsPage() {
       }
     } catch (error) {
       console.error("Failed to update share settings", error);
+      setShareError(error instanceof Error ? error.message : "Unexpected error updating share settings.");
       setAlert({
         type: "error",
         title: "Failed to update share settings",
@@ -497,7 +545,7 @@ export default function ConfigsPage() {
     return url.toString();
   }
 
-  const normalizedShareToken = (shareToken || shareTarget?.share_token || "").trim();
+  const normalizedShareToken = shareTarget?.share_token?.trim() ?? "";
 
   const shareConfigUrl =
     shareTarget && shareEnabled && normalizedShareToken
@@ -567,7 +615,7 @@ export default function ConfigsPage() {
                     <SelectContent>
                       {baseConfigs.map((base) => (
                         <SelectItem key={base.id} value={base.id}>
-                          {base.name}
+                          {baseConfigLabel(base)}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -601,30 +649,6 @@ export default function ConfigsPage() {
                           </label>
                         ))}
                       </div>
-                    )}
-                  </div>
-                </div>
-                <div className="grid gap-2">
-                  <Label>Include tags directly</Label>
-                  <p className="text-xs text-muted-foreground">
-                    Current and future VPN nodes and subscription groups with these tags are
-                    included automatically.
-                  </p>
-                  <div className="max-h-32 overflow-y-auto rounded-lg border p-3">
-                    {availableTags.length === 0 ? (
-                      <p className="text-sm text-muted-foreground">
-                        Add a tag to a VPN node or subscription group first.
-                      </p>
-                    ) : (
-                      availableTags.map((tag) => (
-                        <label key={tag} className="flex items-center gap-2 py-1 text-sm">
-                          <Checkbox
-                            checked={createTagSelection.has(tag)}
-                            onCheckedChange={() => toggleTag(tag, false)}
-                          />
-                          <span>{tag}</span>
-                        </label>
-                      ))
                     )}
                   </div>
                 </div>
@@ -726,11 +750,14 @@ export default function ConfigsPage() {
                         ),
                       ];
                       const selectorLabels = config.selector_tags;
+                      const baseConfig = baseConfigs.find((base) => base.id === config.base_config_id);
                       return (
                         <TableRow key={config.id}>
                           <TableCell className="font-medium">{config.name}</TableCell>
                           <TableCell className="text-sm text-muted-foreground">
-                            {config.base_config_name ?? "—"}
+                            {baseConfig
+                              ? baseConfigLabel(baseConfig)
+                              : config.base_config_name ?? "—"}
                           </TableCell>
                           <TableCell className="text-xs text-muted-foreground">
                             {groupNames.length > 0 ? groupNames.join(", ") : "—"}
@@ -754,10 +781,7 @@ export default function ConfigsPage() {
                               <Button
                                 variant="outline"
                                 size="sm"
-                                onClick={() =>
-                                  window.open(buildShareUrl(config) || undefined, "_blank")
-                                }
-                                disabled={!host}
+                                onClick={() => void openViewDialog(config)}
                               >
                                 View
                               </Button>
@@ -771,9 +795,16 @@ export default function ConfigsPage() {
                               <Button
                                 variant="outline"
                                 size="sm"
-                                onClick={() => openShareDialog(config)}
+                                onClick={() => void openShareDialog(config)}
                               >
                                 Share
+                              </Button>
+                              <Button
+                                variant="destructive"
+                                size="sm"
+                                onClick={() => setDeleteTarget(config)}
+                              >
+                                Delete
                               </Button>
                             </div>
                           </TableCell>
@@ -836,7 +867,7 @@ export default function ConfigsPage() {
                   <SelectContent>
                     {baseConfigs.map((base) => (
                       <SelectItem key={base.id} value={base.id}>
-                        {base.name}
+                        {baseConfigLabel(base)}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -888,7 +919,7 @@ export default function ConfigsPage() {
                       <label key={tag} className="flex items-center gap-2 py-1 text-sm">
                         <Checkbox
                           checked={editTagSelection.has(tag)}
-                          onCheckedChange={() => toggleTag(tag, true)}
+                          onCheckedChange={() => toggleEditTag(tag)}
                           disabled={editSubmitting}
                         />
                         <span>{tag}</span>
@@ -907,23 +938,6 @@ export default function ConfigsPage() {
                   value={editSelectors}
                   onChange={(event) => setEditSelectors(event.target.value)}
                 />
-              </div>
-              <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-4">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-destructive">Delete config</p>
-                    <p className="text-xs text-muted-foreground">
-                      This removes the rendered config and invalidates existing share links.
-                    </p>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="destructive"
-                    onClick={() => setDeleteTarget(editTarget)}
-                  >
-                    Delete
-                  </Button>
-                </div>
               </div>
               <DialogFooter>
                 <Button
@@ -947,6 +961,27 @@ export default function ConfigsPage() {
       </Dialog>
 
       <Dialog
+        open={Boolean(viewTarget)}
+        onOpenChange={(open) => {
+          if (!open) setViewTarget(null);
+        }}
+      >
+        <DialogContent className="max-h-[85vh] max-w-4xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>View {viewTarget?.name}</DialogTitle>
+            <DialogDescription>Rendered sing-box configuration.</DialogDescription>
+          </DialogHeader>
+          {viewLoading ? <p className="text-sm text-muted-foreground">Loading config…</p> : null}
+          {viewError ? <Alert variant="destructive"><AlertDescription>{viewError}</AlertDescription></Alert> : null}
+          {viewContent ? <Textarea value={viewContent} readOnly className="h-[60vh] resize-y font-mono text-xs" /> : null}
+          <DialogFooter>
+            {viewContent ? <Button type="button" variant="outline" onClick={() => void navigator.clipboard.writeText(viewContent)}>Copy JSON</Button> : null}
+            <Button type="button" onClick={() => setViewTarget(null)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
         open={Boolean(shareTarget)}
         onOpenChange={(open) => {
           if (!open) {
@@ -964,6 +999,8 @@ export default function ConfigsPage() {
           </DialogHeader>
           {shareTarget && (
             <div className="flex flex-col gap-4">
+              {shareSubmitting && !shareConfigUrl ? <p className="text-sm text-muted-foreground">Generating share link…</p> : null}
+              {shareError ? <Alert variant="destructive"><AlertDescription>{shareError}</AlertDescription></Alert> : null}
               <div className="flex items-center gap-2">
                 <Checkbox
                   checked={shareEnabled}

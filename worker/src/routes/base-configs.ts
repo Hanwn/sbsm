@@ -5,6 +5,11 @@ import {
   stringifyConfig,
   parseSelectorTags,
   parseBaseConfig,
+  parseSelectorRules,
+  validateSelectorRules,
+  isSingBoxVersion,
+  parseTemplateVersion,
+  serializeTemplateSettings,
 } from '../lib/config';
 import type { AuthContext, Env, RouteDefinition } from '../lib/context';
 import type { BaseConfigRow } from '../models';
@@ -17,6 +22,8 @@ function formatBaseConfig(row: BaseConfigRow) {
     name: row.name,
     description: row.description,
     selector_tags: parseSelectorTags(row.selector_tags),
+    selector_rules: parseSelectorRules(row.selector_tags),
+    version: parseTemplateVersion(row.selector_tags),
     config: parseBaseConfig(row.config_json),
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -34,8 +41,14 @@ async function handleCreateBaseConfig(
     description?: string;
     configJson?: unknown;
     selectorTags?: string[];
+    selectorRules?: unknown;
+    version?: unknown;
   }>(request);
   if (!body) return errorResponse('Invalid JSON payload', 400);
+  const selectorRules = body.selectorRules === undefined ? [] : validateSelectorRules(body.selectorRules);
+  if (!selectorRules) return errorResponse('Invalid selector rules', 422);
+  if (body.version !== undefined && body.version !== null && !isSingBoxVersion(body.version))
+    return errorResponse('Unsupported sing-box version', 422);
 
   const name = body.name?.trim();
   if (!name) return errorResponse('`name` is required', 422);
@@ -56,7 +69,7 @@ async function handleCreateBaseConfig(
 
   const id = crypto.randomUUID();
   const nowJson = stringifyConfig(template);
-  const selectorJson = JSON.stringify(selectorTags);
+  const selectorJson = serializeTemplateSettings(selectorTags, selectorRules, body.version ?? null);
 
   const insert = await env.DB.prepare(
     `INSERT INTO sb_base_configs (id, name, description, config_json, selector_tags)
@@ -123,8 +136,14 @@ async function handleUpdateBaseConfig(
     description?: string | null;
     configJson?: unknown;
     selectorTags?: string[];
+    selectorRules?: unknown;
+    version?: unknown;
   }>(request);
   if (!body) return errorResponse('Invalid JSON payload', 400);
+  const selectorRules = body.selectorRules === undefined ? undefined : validateSelectorRules(body.selectorRules);
+  if (selectorRules === null) return errorResponse('Invalid selector rules', 422);
+  if (body.version !== undefined && body.version !== null && !isSingBoxVersion(body.version))
+    return errorResponse('Unsupported sing-box version', 422);
 
   const updates: string[] = [];
   const bindings: unknown[] = [];
@@ -144,7 +163,7 @@ async function handleUpdateBaseConfig(
     updates.push('config_json = ?');
     bindings.push(stringifyConfig(template));
   }
-  if (body.selectorTags !== undefined) {
+  if (body.selectorTags !== undefined || selectorRules !== undefined || body.version !== undefined) {
     const selectorTags = Array.isArray(body.selectorTags)
       ? Array.from(
           new Set(
@@ -153,9 +172,13 @@ async function handleUpdateBaseConfig(
               .filter((tag) => tag.length > 0),
           ),
         )
-      : [];
+      : parseSelectorTags(row.selector_tags);
     updates.push('selector_tags = ?');
-    bindings.push(JSON.stringify(selectorTags));
+    bindings.push(serializeTemplateSettings(
+      selectorTags,
+      selectorRules ?? parseSelectorRules(row.selector_tags),
+      body.version === undefined ? parseTemplateVersion(row.selector_tags) : body.version,
+    ));
   }
 
   if (updates.length === 0) {

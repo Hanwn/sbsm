@@ -13,6 +13,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Breadcrumb,
@@ -29,9 +30,9 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -43,6 +44,8 @@ type BaseConfig = {
   name: string;
   description: string | null;
   selector_tags: string[];
+  selector_rules: { outbound: string; nodes: string }[];
+  version: "1.12" | "1.13" | "1.14" | null;
   config: unknown;
   created_at: number;
   updated_at: number;
@@ -78,17 +81,19 @@ export default function BaseConfigsPage() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [createName, setCreateName] = useState("");
   const [createDescription, setCreateDescription] = useState("");
+  const [createVersion, setCreateVersion] = useState<"1.12" | "1.13" | "1.14">("1.12");
   const [createConfigJson, setCreateConfigJson] = useState(EMPTY_TEMPLATE);
-  const [createTagOptions, setCreateTagOptions] = useState<string[]>([]);
-  const [createSelectedTags, setCreateSelectedTags] = useState<Set<string>>(new Set());
+  const [createFileError, setCreateFileError] = useState("");
+  const [createRules, setCreateRules] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
 
   const [editTarget, setEditTarget] = useState<BaseConfig | null>(null);
   const [editName, setEditName] = useState("");
   const [editDescription, setEditDescription] = useState("");
+  const [editVersion, setEditVersion] = useState<"1.12" | "1.13" | "1.14" | "unspecified">("unspecified");
   const [editConfigJson, setEditConfigJson] = useState(EMPTY_TEMPLATE);
-  const [editTagOptions, setEditTagOptions] = useState<string[]>([]);
-  const [editSelectedTags, setEditSelectedTags] = useState<Set<string>>(new Set());
+  const [editFileError, setEditFileError] = useState("");
+  const [editRules, setEditRules] = useState<Record<string, string>>({});
   const [editing, setEditing] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<BaseConfig | null>(null);
 
@@ -130,52 +135,72 @@ export default function BaseConfigsPage() {
   function resetCreateForm() {
     setCreateName("");
     setCreateDescription("");
+    setCreateVersion("1.12");
     setCreateConfigJson(EMPTY_TEMPLATE);
-    setCreateTagOptions(extractOutboundTags(EMPTY_TEMPLATE));
-    setCreateSelectedTags(new Set());
+    setCreateFileError("");
+    setCreateRules({});
   }
 
   function openEditDialog(config: BaseConfig) {
     setEditTarget(config);
     setEditName(config.name);
     setEditDescription(config.description ?? "");
+    setEditVersion(config.version ?? "unspecified");
     setEditConfigJson(JSON.stringify(config.config, null, 2));
-    const options = extractOutboundTags(config.config);
-    setEditTagOptions(options);
-    setEditSelectedTags(new Set(config.selector_tags.filter((tag) => options.includes(tag))));
+    setEditFileError("");
+    const selected = Object.fromEntries(config.selector_tags.map((tag) => [tag, ".*"]));
+    for (const rule of config.selector_rules) {
+      try {
+        for (const tag of selectorOptions(JSON.stringify(config.config))) {
+          if (new RegExp(rule.outbound, "i").test(tag)) selected[tag] = rule.nodes;
+        }
+      } catch {
+        // Invalid rules remain visible in the stored template until it is saved.
+      }
+    }
+    setEditRules(selected);
   }
 
-  function toggleTag(selection: Set<string>, tag: string): Set<string> {
-    const next = new Set(selection);
-    if (next.has(tag)) {
-      next.delete(tag);
-    } else {
-      next.add(tag);
+  function parseRules(input: Record<string, string>): { outbound: string; nodes: string }[] {
+    return Object.entries(input).map(([outbound, nodes]) => {
+      new RegExp(nodes);
+      return { outbound: `^${outbound.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, nodes };
+    });
+  }
+
+  function selectorOptions(json: string): string[] {
+    try {
+      const config = JSON.parse(json) as { outbounds?: { type?: string; tag?: string; outbounds?: unknown[] }[] };
+      return [...new Set((config.outbounds ?? [])
+        .filter((outbound) => outbound && (outbound.type === "selector" || outbound.type === "urltest") && typeof outbound.tag === "string" && (!Array.isArray(outbound.outbounds) || outbound.outbounds.length === 0))
+        .map((outbound) => outbound.tag as string))];
+    } catch {
+      return [];
     }
+  }
+
+  function toggleRule(current: Record<string, string>, tag: string): Record<string, string> {
+    const next = { ...current };
+    if (tag in next) delete next[tag];
+    else next[tag] = ".*";
     return next;
   }
 
-  function isRecord(value: unknown): value is Record<string, unknown> {
-    return typeof value === "object" && value !== null;
-  }
-
-  function extractOutboundTags(config: unknown): string[] {
+  async function loadConfigFile(
+    file: File,
+    setJson: (value: string) => void,
+    setError: (value: string) => void,
+  ): Promise<void> {
     try {
-      const source = typeof config === "string" ? JSON.parse(config) : config;
-      if (!isRecord(source)) return [];
-      const outbounds = source.outbounds;
-      if (!Array.isArray(outbounds)) return [];
-      const tags: string[] = [];
-      for (const outbound of outbounds) {
-        if (!isRecord(outbound)) continue;
-        const tagField = outbound.tag;
-        const nameField = outbound.name;
-        const value = typeof tagField === "string" ? tagField : typeof nameField === "string" ? nameField : null;
-        if (value) tags.push(value);
+      const content = (await file.text()).replace(/^\uFEFF/, "");
+      const parsed: unknown = JSON.parse(content);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("The file must contain a JSON object.");
       }
-      return Array.from(new Set(tags));
-    } catch {
-      return [];
+      setJson(JSON.stringify(parsed, null, 2));
+      setError("");
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Could not read the JSON file.");
     }
   }
 
@@ -195,7 +220,8 @@ export default function BaseConfigsPage() {
       const payload = {
         name: createName.trim(),
         description: createDescription.trim() || undefined,
-        selectorTags: Array.from(createSelectedTags),
+        version: createVersion,
+        selectorRules: parseRules(Object.fromEntries(Object.entries(createRules).filter(([tag]) => selectorOptions(createConfigJson).includes(tag)))),
         configJson: parsed,
       };
       const created = await apiFetch<BaseConfig>("/api/base-configs", {
@@ -215,8 +241,8 @@ export default function BaseConfigsPage() {
       if (error instanceof SyntaxError) {
         setAlert({
           type: "error",
-          title: "Invalid JSON",
-          message: "Please provide valid JSON for the sing-box template.",
+          title: "Invalid template or filter",
+          message: error.message,
         });
       } else {
         setAlert({
@@ -248,7 +274,9 @@ export default function BaseConfigsPage() {
       const payload = {
         name: editName.trim(),
         description: editDescription.trim(),
-        selectorTags: Array.from(editSelectedTags),
+        version: editVersion === "unspecified" ? null : editVersion,
+        selectorRules: parseRules(Object.fromEntries(Object.entries(editRules).filter(([tag]) => selectorOptions(editConfigJson).includes(tag)))),
+        selectorTags: [],
         configJson: parsed,
       };
       const updated = await apiFetch<BaseConfig>(`/api/base-configs/${editTarget.id}`, {
@@ -267,8 +295,8 @@ export default function BaseConfigsPage() {
       if (error instanceof SyntaxError) {
         setAlert({
           type: "error",
-          title: "Invalid JSON",
-          message: "Please provide valid JSON for the sing-box template.",
+          title: "Invalid template or filter",
+          message: error.message,
         });
       } else {
         setAlert({
@@ -329,17 +357,6 @@ export default function BaseConfigsPage() {
             onOpenChange={(open) => {
               setCreateDialogOpen(open);
               if (!open) resetCreateForm();
-              if (open) {
-                const options = extractOutboundTags(createConfigJson);
-                setCreateTagOptions(options);
-                setCreateSelectedTags((prev) => {
-                  const next = new Set<string>();
-                  for (const tag of options) {
-                    if (prev.has(tag)) next.add(tag);
-                  }
-                  return next;
-                });
-              }
             }}
           >
             <DialogTrigger asChild>
@@ -348,7 +365,7 @@ export default function BaseConfigsPage() {
             <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>New sing-box template</DialogTitle>
-                <DialogDescription>Provide template details and optional selector tags.</DialogDescription>
+                <DialogDescription>Choose the target sing-box version and selector rules. The template JSON is used as provided.</DialogDescription>
               </DialogHeader>
               <form className="flex flex-col gap-4" onSubmit={handleCreate}>
                 <div className="grid gap-2">
@@ -362,6 +379,17 @@ export default function BaseConfigsPage() {
                   />
                 </div>
                 <div className="grid gap-2">
+                  <Label>Sing-box version</Label>
+                  <Select value={createVersion} onValueChange={(value) => setCreateVersion(value as "1.12" | "1.13" | "1.14")}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="1.12">1.12</SelectItem>
+                      <SelectItem value="1.13">1.13</SelectItem>
+                      <SelectItem value="1.14">1.14</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid gap-2">
                   <Label htmlFor="base-description">Description</Label>
                   <Textarea
                     id="base-description"
@@ -371,26 +399,19 @@ export default function BaseConfigsPage() {
                   />
                 </div>
                 <div className="grid gap-2">
-                  <Label>Selector tags</Label>
-                  {createTagOptions.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">
-                      No outbound tags detected. Add `tag` values in your config JSON to enable selector choices.
-                    </p>
-                  ) : (
-                    <div className="max-h-48 space-y-2 overflow-y-auto rounded-lg border p-3">
-                      {createTagOptions.map((tag) => (
-                        <label key={tag} className="flex items-center gap-2 text-sm">
-                          <Checkbox
-                            checked={createSelectedTags.has(tag)}
-                            onCheckedChange={() =>
-                              setCreateSelectedTags((prev) => toggleTag(prev, tag))
-                            }
-                          />
-                          <span>{tag}</span>
-                        </label>
-                      ))}
-                    </div>
-                  )}
+                  <Label>Selector groups</Label>
+                  <div className="max-h-36 space-y-1 overflow-y-auto">
+                    {selectorOptions(createConfigJson).map((tag) => (
+                      <div key={tag} className="flex items-center gap-2">
+                        <Checkbox checked={tag in createRules} onCheckedChange={() => setCreateRules((current) => toggleRule(current, tag))} />
+                        <span className="min-w-32 text-sm">{tag}</span>
+                        <Input aria-label={`Node filter for ${tag}`} className={`h-7 min-w-0 flex-1 font-mono text-xs ${tag in createRules ? "" : "invisible"}`} value={createRules[tag] ?? ""}
+                          onChange={(event) => setCreateRules((current) => ({ ...current, [tag]: event.target.value }))}
+                          placeholder="Node name regex, e.g. 香港|HK|🇭🇰" disabled={!(tag in createRules)} />
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-xs text-muted-foreground">Only groups with empty outbounds can be selected. Use .* for all nodes; filters ignore case.</p>
                 </div>
                 <div className="grid gap-2">
                   <Label htmlFor="base-config-json">Config JSON</Label>
@@ -398,20 +419,19 @@ export default function BaseConfigsPage() {
                     id="base-config-json"
                     value={createConfigJson}
                     onChange={(event) => {
-                      const value = event.target.value;
-                      setCreateConfigJson(value);
-                      const options = extractOutboundTags(value);
-                      setCreateTagOptions(options);
-                      setCreateSelectedTags((prev) => {
-                        const next = new Set<string>();
-                        for (const tag of options) {
-                          if (prev.has(tag)) next.add(tag);
-                        }
-                        return next;
-                      });
+                      setCreateConfigJson(event.target.value);
+                      setCreateFileError("");
                     }}
                     className="h-56 resize-y font-mono text-xs"
                   />
+                  <Label htmlFor="base-config-file">Or upload a JSON file</Label>
+                  <Input id="base-config-file" type="file" accept=".json,application/json"
+                    onChange={(event) => {
+                      const file = event.currentTarget.files?.[0];
+                      event.currentTarget.value = "";
+                      if (file) void loadConfigFile(file, setCreateConfigJson, setCreateFileError);
+                    }} />
+                  {createFileError && <p role="alert" className="text-xs text-destructive">{createFileError}</p>}
                 </div>
                 <DialogFooter>
                   <Button type="button" variant="outline" onClick={() => setCreateDialogOpen(false)}>
@@ -451,7 +471,8 @@ export default function BaseConfigsPage() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Name</TableHead>
-                      <TableHead>Selector tags</TableHead>
+                      <TableHead>Version</TableHead>
+                      <TableHead>Selector groups</TableHead>
                       <TableHead>Updated</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
@@ -460,8 +481,9 @@ export default function BaseConfigsPage() {
                     {sortedConfigs.map((config) => (
                       <TableRow key={config.id}>
                         <TableCell className="font-medium">{config.name}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">{config.version ? `sing-box ${config.version}` : "Unspecified"}</TableCell>
                         <TableCell className="max-w-[320px] text-xs text-muted-foreground">
-                          {config.selector_tags.length > 0 ? config.selector_tags.join(", ") : "—"}
+                          {config.selector_rules.length > 0 ? config.selector_rules.map((rule) => rule.outbound).join(", ") : config.selector_tags.length > 0 ? config.selector_tags.join(", ") : "—"}
                         </TableCell>
                         <TableCell className="text-xs text-muted-foreground">
                           {new Date(config.updated_at * 1000).toLocaleString()}
@@ -502,7 +524,7 @@ export default function BaseConfigsPage() {
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Edit base config</DialogTitle>
-            <DialogDescription>Update template settings and selector tags.</DialogDescription>
+            <DialogDescription>Set the target sing-box version and selector rules. The template JSON is used as provided.</DialogDescription>
           </DialogHeader>
           <form className="flex flex-col gap-4" onSubmit={handleUpdate}>
             <div className="grid gap-2">
@@ -515,6 +537,18 @@ export default function BaseConfigsPage() {
               />
             </div>
             <div className="grid gap-2">
+              <Label>Sing-box version</Label>
+              <Select value={editVersion} onValueChange={(value) => setEditVersion(value as "1.12" | "1.13" | "1.14" | "unspecified")}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="unspecified">Unspecified</SelectItem>
+                  <SelectItem value="1.12">1.12</SelectItem>
+                  <SelectItem value="1.13">1.13</SelectItem>
+                  <SelectItem value="1.14">1.14</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-2">
               <Label htmlFor="edit-base-description">Description</Label>
               <Textarea
                 id="edit-base-description"
@@ -523,26 +557,19 @@ export default function BaseConfigsPage() {
               />
             </div>
             <div className="grid gap-2">
-              <Label>Selector tags</Label>
-              {editTagOptions.length === 0 ? (
-                <p className="text-xs text-muted-foreground">
-                  No outbound tags detected. Add `tag` values in your config JSON to enable selector choices.
-                </p>
-              ) : (
-                <div className="max-h-48 space-y-2 overflow-y-auto rounded-lg border p-3">
-                  {editTagOptions.map((tag) => (
-                    <label key={tag} className="flex items-center gap-2 text-sm">
-                      <Checkbox
-                        checked={editSelectedTags.has(tag)}
-                        onCheckedChange={() =>
-                          setEditSelectedTags((prev) => toggleTag(prev, tag))
-                        }
-                      />
-                      <span>{tag}</span>
-                    </label>
-                  ))}
-                </div>
-              )}
+              <Label>Selector groups</Label>
+              <div className="max-h-36 space-y-1 overflow-y-auto">
+                {selectorOptions(editConfigJson).map((tag) => (
+                  <div key={tag} className="flex items-center gap-2">
+                    <Checkbox checked={tag in editRules} onCheckedChange={() => setEditRules((current) => toggleRule(current, tag))} />
+                    <span className="min-w-32 text-sm">{tag}</span>
+                    <Input aria-label={`Node filter for ${tag}`} className={`h-7 min-w-0 flex-1 font-mono text-xs ${tag in editRules ? "" : "invisible"}`} value={editRules[tag] ?? ""}
+                      onChange={(event) => setEditRules((current) => ({ ...current, [tag]: event.target.value }))}
+                      placeholder="Node name regex, e.g. 香港|HK|🇭🇰" disabled={!(tag in editRules)} />
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">Only groups with empty outbounds can be selected. Use .* for all nodes; filters ignore case.</p>
             </div>
             <div className="grid gap-2">
               <Label htmlFor="edit-base-json">Config JSON</Label>
@@ -550,20 +577,19 @@ export default function BaseConfigsPage() {
                 id="edit-base-json"
                 value={editConfigJson}
                 onChange={(event) => {
-                  const value = event.target.value;
-                  setEditConfigJson(value);
-                  const options = extractOutboundTags(value);
-                  setEditTagOptions(options);
-                  setEditSelectedTags((prev) => {
-                    const next = new Set<string>();
-                    for (const tag of options) {
-                      if (prev.has(tag)) next.add(tag);
-                    }
-                    return next;
-                  });
+                  setEditConfigJson(event.target.value);
+                  setEditFileError("");
                 }}
                 className="h-56 resize-y font-mono text-xs"
               />
+              <Label htmlFor="edit-base-file">Or upload a JSON file</Label>
+              <Input id="edit-base-file" type="file" accept=".json,application/json"
+                onChange={(event) => {
+                  const file = event.currentTarget.files?.[0];
+                  event.currentTarget.value = "";
+                  if (file) void loadConfigFile(file, setEditConfigJson, setEditFileError);
+                }} />
+              {editFileError && <p role="alert" className="text-xs text-destructive">{editFileError}</p>}
             </div>
             <DialogFooter>
               <Button
