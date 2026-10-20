@@ -1,7 +1,5 @@
 import type { Env, RouteHandler } from './context';
-import { CORS_HEADERS } from './http';
-
-const REALM = 'sing-box-admin';
+import { errorResponse } from './http';
 
 async function hashPlaintext(password: string): Promise<string> {
   const data = new TextEncoder().encode(password);
@@ -48,14 +46,7 @@ export function requireAuth(handler: RouteHandler) {
   return async (request: Request, env: Env, params: Record<string, string>): Promise<Response> => {
     const username = await authenticateBasic(request, env);
     if (!username) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401,
-        headers: {
-          ...CORS_HEADERS,
-          'content-type': 'application/json; charset=utf-8',
-          'WWW-Authenticate': `Basic realm="${REALM}"`,
-        },
-      });
+      return errorResponse('Unauthorized', 401);
     }
     return handler(request, env, params, { username });
   };

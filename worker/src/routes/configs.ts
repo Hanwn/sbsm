@@ -653,14 +653,7 @@ async function handleGetConfig(
   if (!authenticated) {
     const username = await authenticateBasic(request, env);
     if (!username) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401,
-        headers: {
-          ...CORS_HEADERS,
-          'content-type': 'application/json; charset=utf-8',
-          'WWW-Authenticate': 'Basic realm="sing-box-admin"',
-        },
-      });
+      return errorResponse('Unauthorized', 401);
     }
   }
 
