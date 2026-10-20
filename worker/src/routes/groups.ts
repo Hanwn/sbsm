@@ -11,6 +11,15 @@ import {
   resolveSubscriptionLinks,
 } from '../lib/subscription';
 
+type GroupResponse = ReturnType<typeof formatGroupResponse>;
+
+function parseTagNames(value: unknown): string[] | null {
+  if (!Array.isArray(value) || value.some((tag) => typeof tag !== 'string')) return null;
+  const names = value.map((tag: string) => tag.trim());
+  if (names.some((tag) => !tag || tag.length > 64)) return null;
+  return [...new Set(names)];
+}
+
 async function handleCreateGroup(
   request: Request,
   env: Env,
@@ -21,6 +30,8 @@ async function handleCreateGroup(
     name?: string;
     description?: string;
     linkIds?: string[];
+    tagNames?: string[];
+    tag?: string | null;
     type?: string;
     subscriptionUrl?: string;
     excludeKeywords?: string[] | string;
@@ -37,14 +48,31 @@ async function handleCreateGroup(
   if (requestedType === 'subscription' && Array.isArray(body.linkIds) && body.linkIds.length > 0) {
     return errorResponse('Subscription groups cannot include manual linkIds', 422);
   }
+  if (body.tagNames !== undefined && requestedType === 'subscription') {
+    return errorResponse('Subscription groups cannot include tagNames', 422);
+  }
+  if (body.tag != null && typeof body.tag !== 'string') {
+    return errorResponse('`tag` must be a string', 422);
+  }
+  const tag = body.tag?.trim() || null;
+  if (tag && tag.length > 64) return errorResponse('`tag` must be at most 64 characters', 422);
+  if (requestedType === 'manual' && tag)
+    return errorResponse('Manual groups cannot have a subscription tag', 422);
+  const tagNames = body.tagNames === undefined ? [] : parseTagNames(body.tagNames);
+  if (!tagNames)
+    return errorResponse('`tagNames` must contain non-empty strings up to 64 characters', 422);
+  const subscriptionUrl = body.subscriptionUrl?.trim();
+  if (requestedType === 'subscription' && !subscriptionUrl) {
+    return errorResponse('`subscriptionUrl` is required for subscription groups', 422);
+  }
 
   const id = crypto.randomUUID();
   const description = body.description?.trim() ?? null;
 
   const insert = await env.DB.prepare(
-    `INSERT INTO vpn_groups (id, name, description, type) VALUES (?, ?, ?, ?)`,
+    `INSERT INTO vpn_groups (id, name, description, type, tag) VALUES (?, ?, ?, ?, ?)`,
   )
-    .bind(id, name, description, requestedType)
+    .bind(id, name, description, requestedType, tag)
     .run();
 
   if (!insert.success) {
@@ -53,11 +81,6 @@ async function handleCreateGroup(
   }
 
   if (requestedType === 'subscription') {
-    const subscriptionUrl = body.subscriptionUrl?.trim();
-    if (!subscriptionUrl) {
-      return errorResponse('`subscriptionUrl` is required for subscription groups', 422);
-    }
-
     const excludeKeywords = normalizeExcludeKeywordsInput(body.excludeKeywords);
 
     const insertSubscription = await env.DB.prepare(
@@ -74,7 +97,9 @@ async function handleCreateGroup(
   } else {
     const linkIds =
       Array.isArray(body.linkIds) && body.linkIds.length > 0
-        ? Array.from(new Set(body.linkIds.filter((item) => typeof item === 'string' && item.length)))
+        ? Array.from(
+            new Set(body.linkIds.filter((item) => typeof item === 'string' && item.length)),
+          )
         : [];
 
     if (linkIds.length > 0) {
@@ -82,7 +107,9 @@ async function handleCreateGroup(
       const foundIds = new Set(links.map((link) => link.id));
       const missing = linkIds.filter((id) => !foundIds.has(id));
       if (missing.length > 0) {
-        return errorResponse('Some linkIds were not found', 404, { linkIds: missing });
+        return errorResponse('Some linkIds were not found', 404, {
+          linkIds: missing,
+        });
       }
 
       const statements = linkIds.map((linkId) =>
@@ -94,6 +121,13 @@ async function handleCreateGroup(
         await env.DB.batch(statements);
       }
     }
+    if (tagNames.length > 0) {
+      await env.DB.batch(
+        tagNames.map((tag) =>
+          env.DB.prepare(`INSERT INTO vpn_group_tags (group_id, tag) VALUES (?, ?)`).bind(id, tag),
+        ),
+      );
+    }
   }
 
   const group = await fetchGroupById(env, id);
@@ -103,11 +137,13 @@ async function handleCreateGroup(
   }
 
   const manualLinkIds =
-    group.type === 'manual' ? await loadManualGroupLinkIds(env, [id]).then((map) => map.get(id) ?? []) : [];
-  const subscription =
-    group.type === 'subscription' ? await fetchGroupSubscription(env, id) : null;
+    group.type === 'manual'
+      ? await loadManualGroupLinkIds(env, [id]).then((map) => map.get(id) ?? [])
+      : [];
+  const manualTagNames = group.type === 'manual' ? tagNames : [];
+  const subscription = group.type === 'subscription' ? await fetchGroupSubscription(env, id) : null;
 
-  return jsonResponse(formatGroupResponse(group, manualLinkIds, subscription), 201);
+  return jsonResponse(formatGroupResponse(group, manualLinkIds, subscription, manualTagNames), 201);
 }
 
 async function handleListGroups(
@@ -122,21 +158,25 @@ async function handleListGroups(
   }
 
   const { results } = await env.DB.prepare<VpnGroupRow>(
-    `SELECT id, name, description, type, created_at, updated_at
+    `SELECT id, name, description, type, tag, created_at, updated_at
        FROM vpn_groups
        ORDER BY created_at DESC`,
   ).all();
 
   const manualIds = results.filter((group) => group.type === 'manual').map((group) => group.id);
   const manualLinkMap = await loadManualGroupLinkIds(env, manualIds);
+  const manualTagMap = await loadManualGroupTagNames(env, manualIds);
 
-  const subscriptionIds = results.filter((group) => group.type === 'subscription').map((group) => group.id);
+  const subscriptionIds = results
+    .filter((group) => group.type === 'subscription')
+    .map((group) => group.id);
   const subscriptionMap = await loadSubscriptionMap(env, subscriptionIds);
 
   const payload: GroupResponse[] = results.map((group) => {
-    const linkIds = group.type === 'manual' ? manualLinkMap.get(group.id) ?? [] : [];
-    const subscription = group.type === 'subscription' ? subscriptionMap.get(group.id) ?? null : null;
-    return formatGroupResponse(group, linkIds, subscription);
+    const linkIds = group.type === 'manual' ? (manualLinkMap.get(group.id) ?? []) : [];
+    const subscription =
+      group.type === 'subscription' ? (subscriptionMap.get(group.id) ?? null) : null;
+    return formatGroupResponse(group, linkIds, subscription, manualTagMap.get(group.id) ?? []);
   });
 
   return jsonResponse(payload);
@@ -172,13 +212,16 @@ async function handleAddGroupLinks(
   const foundIds = new Set(links.map((link) => link.id));
   const missing = linkIds.filter((id) => !foundIds.has(id));
   if (missing.length > 0) {
-    return errorResponse('Some linkIds were not found', 404, { linkIds: missing });
+    return errorResponse('Some linkIds were not found', 404, {
+      linkIds: missing,
+    });
   }
 
   const statements = linkIds.map((linkId) =>
-    env.DB.prepare(
-      `INSERT OR IGNORE INTO vpn_group_links (group_id, link_id) VALUES (?, ?)`,
-    ).bind(groupId, linkId),
+    env.DB.prepare(`INSERT OR IGNORE INTO vpn_group_links (group_id, link_id) VALUES (?, ?)`).bind(
+      groupId,
+      linkId,
+    ),
   );
   await env.DB.batch(statements);
 
@@ -215,6 +258,35 @@ async function handleRemoveGroupLink(
   return jsonResponse({ success: true });
 }
 
+async function handleUpdateGroupTags(
+  request: Request,
+  env: Env,
+  params: Record<string, string>,
+  _auth: AuthContext,
+): Promise<Response> {
+  const groupId = params.id;
+  if (!groupId) return errorResponse('Missing group id', 400);
+  const group = await fetchGroupById(env, groupId);
+  if (!group) return errorResponse('Group not found', 404);
+  if (group.type !== 'manual')
+    return errorResponse('Cannot attach tags to a subscription group', 409);
+
+  const body = await readJsonBody<{ tagNames?: unknown }>(request);
+  if (!body) return errorResponse('Invalid JSON payload', 400);
+  const tagNames = parseTagNames(body.tagNames);
+  if (!tagNames)
+    return errorResponse('`tagNames` must contain non-empty strings up to 64 characters', 422);
+
+  const statements = [
+    env.DB.prepare(`DELETE FROM vpn_group_tags WHERE group_id = ?`).bind(groupId),
+    ...tagNames.map((tag) =>
+      env.DB.prepare(`INSERT INTO vpn_group_tags (group_id, tag) VALUES (?, ?)`).bind(groupId, tag),
+    ),
+  ];
+  await env.DB.batch(statements);
+  return jsonResponse({ success: true, tag_names: tagNames });
+}
+
 async function handleUpdateSubscriptionGroup(
   request: Request,
   env: Env,
@@ -239,25 +311,35 @@ async function handleUpdateSubscriptionGroup(
     name?: string;
     description?: string | null;
     subscriptionUrl?: string;
+    tag?: string | null;
     refresh?: boolean;
   }>(request);
   if (!body) return errorResponse('Invalid JSON payload', 400);
+  if (body.tag != null && typeof body.tag !== 'string')
+    return errorResponse('`tag` must be a string', 422);
+  const nextTag = body.tag === undefined ? group.tag : body.tag?.trim() || null;
+  if (nextTag && nextTag.length > 64)
+    return errorResponse('`tag` must be at most 64 characters', 422);
 
   const updates: Promise<unknown>[] = [];
   if (body.name !== undefined || body.description !== undefined) {
-    const nextName = body.name !== undefined ? body.name?.trim() ?? '' : group.name;
+    const nextName = body.name !== undefined ? (body.name?.trim() ?? '') : group.name;
     if (!nextName) return errorResponse('`name` cannot be empty', 422);
     const nextDescription =
-      body.description !== undefined ? body.description?.trim() ?? null : group.description;
+      body.description !== undefined ? (body.description?.trim() ?? null) : group.description;
     updates.push(
-      env.DB.prepare(
-        `UPDATE vpn_groups SET name = ?, description = ? WHERE id = ?`,
-      )
+      env.DB.prepare(`UPDATE vpn_groups SET name = ?, description = ? WHERE id = ?`)
         .bind(nextName, nextDescription, groupId)
         .run(),
     );
     group.name = nextName;
     group.description = nextDescription;
+  }
+  if (body.tag !== undefined) {
+    updates.push(
+      env.DB.prepare(`UPDATE vpn_groups SET tag = ? WHERE id = ?`).bind(nextTag, groupId).run(),
+    );
+    group.tag = nextTag;
   }
 
   let shouldForceRefresh = Boolean(body.refresh);
@@ -327,15 +409,18 @@ function formatGroupResponse(
   group: VpnGroupRow,
   linkIds: string[],
   subscription: VpnGroupSubscriptionRow | null,
+  tagNames: string[] = [],
 ) {
   return {
     id: group.id,
     name: group.name,
     description: group.description,
     type: group.type,
+    tag: group.tag,
     created_at: group.created_at,
     updated_at: group.updated_at,
     link_ids: linkIds,
+    tag_names: tagNames,
     subscription:
       group.type === 'subscription' && subscription
         ? {
@@ -349,7 +434,10 @@ function formatGroupResponse(
   };
 }
 
-async function loadManualGroupLinkIds(env: Env, groupIds: string[]): Promise<Map<string, string[]>> {
+async function loadManualGroupLinkIds(
+  env: Env,
+  groupIds: string[],
+): Promise<Map<string, string[]>> {
   const map = new Map<string, string[]>();
   if (groupIds.length === 0) return map;
   const { clause, bindings } = createInClause(groupIds);
@@ -363,6 +451,26 @@ async function loadManualGroupLinkIds(env: Env, groupIds: string[]): Promise<Map
     const list = map.get(row.group_id);
     if (list) list.push(row.link_id);
     else map.set(row.group_id, [row.link_id]);
+  }
+  return map;
+}
+
+async function loadManualGroupTagNames(
+  env: Env,
+  groupIds: string[],
+): Promise<Map<string, string[]>> {
+  const map = new Map<string, string[]>();
+  if (groupIds.length === 0) return map;
+  const { clause, bindings } = createInClause(groupIds);
+  const { results } = await env.DB.prepare<{ group_id: string; tag: string }>(
+    `SELECT group_id, tag FROM vpn_group_tags WHERE group_id IN ${clause} ORDER BY tag`,
+  )
+    .bind(...bindings)
+    .all();
+  for (const row of results) {
+    const tags = map.get(row.group_id) ?? [];
+    tags.push(row.tag);
+    map.set(row.group_id, tags);
   }
   return map;
 }
@@ -422,12 +530,19 @@ export const groupRoutes: RouteDefinition[] = [
   },
   {
     method: 'PUT',
+    pattern: new URLPattern({ pathname: '/api/groups/:id/tags' }),
+    handler: requireAuth(handleUpdateGroupTags),
+  },
+  {
+    method: 'PUT',
     pattern: new URLPattern({ pathname: '/api/groups/:id/subscription' }),
     handler: requireAuth(handleUpdateSubscriptionGroup),
   },
   {
     method: 'POST',
-    pattern: new URLPattern({ pathname: '/api/groups/:id/subscription/refresh' }),
+    pattern: new URLPattern({
+      pathname: '/api/groups/:id/subscription/refresh',
+    }),
     handler: requireAuth(handleRefreshSubscriptionGroup),
   },
 ];

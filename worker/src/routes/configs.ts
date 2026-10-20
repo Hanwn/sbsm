@@ -1,23 +1,21 @@
 import { jsonResponse, errorResponse, readJsonBody, CORS_HEADERS } from '../lib/http';
 import { requireAuth } from '../lib/auth';
-import {
-  mergeGeneratedOutbounds,
-  parseBaseConfig,
-  parseSelectorTags,
-  stripUnsupportedOutboundFields,
-} from '../lib/config';
+import { mergeGeneratedOutbounds, parseBaseConfig, parseSelectorTags } from '../lib/config';
 import type { AuthContext, Env, RouteDefinition } from '../lib/context';
 import type { SbConfigRow, VpnLinkRow } from '../models';
 import { fetchLinksByIds } from '../db/links';
 import { fetchGroupById, fetchGroupsByIds } from '../db/groups';
-import {
-  fetchBaseConfigById,
-  fetchConfigById,
-  fetchConfigGroups,
-} from '../db/configs';
+import { fetchBaseConfigById, fetchConfigById, fetchConfigGroups } from '../db/configs';
 import { convertLinksToOutbounds } from '../converter';
 import { authenticateBasic } from '../lib/auth';
 import { resolveSubscriptionLinks } from '../lib/subscription';
+
+function parseLinkTagNames(value: unknown): string[] | null {
+  if (!Array.isArray(value) || value.some((tag) => typeof tag !== 'string')) return null;
+  const names = value.map((tag: string) => tag.trim());
+  if (names.some((tag) => !tag || tag.length > 64)) return null;
+  return [...new Set(names)];
+}
 
 async function handleCreateConfig(
   request: Request,
@@ -31,6 +29,7 @@ async function handleCreateConfig(
     baseConfigId?: string;
     selectorTags?: string[];
     groupIds?: string[];
+    tagNames?: string[];
     shareEnabled?: boolean;
     shareToken?: string;
   }>(request);
@@ -45,6 +44,9 @@ async function handleCreateConfig(
 
   const baseConfigRow = await fetchBaseConfigById(env, baseConfigId);
   if (!baseConfigRow) return errorResponse('Base config not found', 404);
+  const tagNames = body.tagNames === undefined ? [] : parseLinkTagNames(body.tagNames);
+  if (!tagNames)
+    return errorResponse('`tagNames` must contain non-empty strings up to 64 characters', 422);
 
   const selectorTags =
     Array.isArray(body.selectorTags) && body.selectorTags.length
@@ -60,9 +62,7 @@ async function handleCreateConfig(
   const id = crypto.randomUUID();
   const selectorJson = JSON.stringify(selectorTags);
   const shareEnabled = body.shareEnabled === true;
-  const shareToken = shareEnabled
-    ? body.shareToken?.trim() || crypto.randomUUID()
-    : null;
+  const shareToken = shareEnabled ? body.shareToken?.trim() || crypto.randomUUID() : null;
 
   const insert = await env.DB.prepare(
     `INSERT INTO sb_configs (id, base_config_id, name, description, selector_tags, share_token, share_enabled)
@@ -86,7 +86,9 @@ async function handleCreateConfig(
     const foundIds = new Set(groups.map((group) => group.id));
     const missing = groupIds.filter((gid) => !foundIds.has(gid));
     if (missing.length > 0) {
-      return errorResponse('Some groupIds were not found', 404, { groupIds: missing });
+      return errorResponse('Some groupIds were not found', 404, {
+        groupIds: missing,
+      });
     }
     const statements = groupIds.map((groupId, index) =>
       env.DB.prepare(
@@ -96,6 +98,17 @@ async function handleCreateConfig(
       ).bind(id, groupId, index),
     );
     await env.DB.batch(statements);
+  }
+
+  if (tagNames.length > 0) {
+    await env.DB.batch(
+      tagNames.map((tag) =>
+        env.DB.prepare(`INSERT INTO sb_config_link_tags (config_id, tag) VALUES (?, ?)`).bind(
+          id,
+          tag,
+        ),
+      ),
+    );
   }
 
   const config = await fetchConfigById(env, id);
@@ -114,6 +127,7 @@ async function handleCreateConfig(
       share_enabled: shareEnabled,
       share_token: shareToken,
       group_ids: groupIds,
+      tag_names: tagNames,
       created_at: config.created_at,
       updated_at: config.updated_at,
     },
@@ -126,14 +140,31 @@ function parseGroupIds(json: string | null | undefined): string[] {
   try {
     const parsed = JSON.parse(json);
     if (!Array.isArray(parsed)) return [];
-    return parsed.map((value) => (typeof value === 'string' ? value : '')).filter((value) => value.length > 0);
+    return parsed
+      .map((value) => (typeof value === 'string' ? value : ''))
+      .filter((value) => value.length > 0);
   } catch (error) {
     console.error('Failed to parse config group ids', error);
     return [];
   }
 }
 
-function formatConfigRow(row: SbConfigRow & { base_config_name: string | null; group_ids_json?: string | null }) {
+function parseStoredTagNames(json: string | null | undefined): string[] {
+  if (!json) return [];
+  try {
+    return parseLinkTagNames(JSON.parse(json)) ?? [];
+  } catch {
+    return [];
+  }
+}
+
+function formatConfigRow(
+  row: SbConfigRow & {
+    base_config_name: string | null;
+    group_ids_json?: string | null;
+    tag_names_json?: string | null;
+  },
+) {
   return {
     id: row.id,
     base_config_id: row.base_config_id,
@@ -144,6 +175,7 @@ function formatConfigRow(row: SbConfigRow & { base_config_name: string | null; g
     share_enabled: Boolean(row.share_enabled),
     share_token: row.share_token,
     group_ids: parseGroupIds(row.group_ids_json),
+    tag_names: parseStoredTagNames(row.tag_names_json),
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -151,34 +183,74 @@ function formatConfigRow(row: SbConfigRow & { base_config_name: string | null; g
 
 async function collectConfigLinks(env: Env, configId: string): Promise<VpnLinkRow[]> {
   const groupRows = await fetchConfigGroups(env, configId);
-  if (groupRows.length === 0) {
-    return [];
-  }
-
+  const { results: taggedGroups } = await env.DB.prepare<{ id: string }>(
+    `SELECT g.id FROM vpn_groups g
+      WHERE g.type = 'subscription'
+        AND EXISTS (SELECT 1 FROM sb_config_link_tags ct
+                     WHERE ct.config_id = ? AND ct.tag = g.tag)
+      ORDER BY g.created_at ASC, g.id ASC`,
+  )
+    .bind(configId)
+    .all();
+  const groupIds = [
+    ...new Set([...groupRows.map((row) => row.group_id), ...taggedGroups.map((group) => group.id)]),
+  ];
   const aggregated: VpnLinkRow[] = [];
-  for (const row of groupRows) {
-    const group = await fetchGroupById(env, row.group_id);
+  const resolvedSubscriptionIds = new Set<string>();
+  for (const groupId of groupIds) {
+    const group = await fetchGroupById(env, groupId);
     if (!group) continue;
 
     if (group.type === 'subscription') {
+      if (resolvedSubscriptionIds.has(group.id)) continue;
+      resolvedSubscriptionIds.add(group.id);
       const { links } = await resolveSubscriptionLinks(env, group.id);
       aggregated.push(...links);
       continue;
     }
 
     const { results } = await env.DB.prepare<VpnLinkRow>(
-      `SELECT l.id, l.name, l.raw_link, l.created_at, l.updated_at
+      `SELECT l.id, l.name, l.raw_link, l.tag, l.created_at, l.updated_at
          FROM vpn_links l
-         INNER JOIN vpn_group_links gl ON gl.link_id = l.id
-         WHERE gl.group_id = ?
-         ORDER BY l.created_at ASC`,
+         WHERE EXISTS (SELECT 1 FROM vpn_group_links gl
+                        WHERE gl.group_id = ? AND gl.link_id = l.id)
+            OR EXISTS (SELECT 1 FROM vpn_group_tags gt
+                        WHERE gt.group_id = ? AND gt.tag = l.tag)
+         ORDER BY l.created_at ASC, l.id ASC`,
     )
-      .bind(row.group_id)
+      .bind(groupId, groupId)
       .all();
     aggregated.push(...results);
+
+    const { results: matchingSubscriptions } = await env.DB.prepare<{ id: string }>(
+      `SELECT sg.id FROM vpn_groups sg
+        WHERE sg.type = 'subscription'
+          AND EXISTS (SELECT 1 FROM vpn_group_tags gt
+                       WHERE gt.group_id = ? AND gt.tag = sg.tag)
+        ORDER BY sg.created_at ASC, sg.id ASC`,
+    )
+      .bind(groupId)
+      .all();
+    for (const subscriptionGroup of matchingSubscriptions) {
+      if (resolvedSubscriptionIds.has(subscriptionGroup.id)) continue;
+      resolvedSubscriptionIds.add(subscriptionGroup.id);
+      const { links } = await resolveSubscriptionLinks(env, subscriptionGroup.id);
+      aggregated.push(...links);
+    }
   }
 
-  return aggregated;
+  const { results: taggedLinks } = await env.DB.prepare<VpnLinkRow>(
+    `SELECT l.id, l.name, l.raw_link, l.tag, l.created_at, l.updated_at
+       FROM vpn_links l
+      WHERE EXISTS (SELECT 1 FROM sb_config_link_tags ct
+                     WHERE ct.config_id = ? AND ct.tag = l.tag)
+      ORDER BY l.created_at ASC, l.id ASC`,
+  )
+    .bind(configId)
+    .all();
+  aggregated.push(...taggedLinks);
+
+  return [...new Map(aggregated.map((link) => [link.id, link])).values()];
 }
 
 async function handleListConfigs(
@@ -193,7 +265,11 @@ async function handleListConfigs(
   }
 
   const { results } = await env.DB.prepare<
-    SbConfigRow & { base_config_name: string | null; group_ids_json: string | null }
+    SbConfigRow & {
+      base_config_name: string | null;
+      group_ids_json: string | null;
+      tag_names_json: string | null;
+    }
   >(
     `SELECT sc.id,
             sc.base_config_id,
@@ -213,7 +289,8 @@ async function handleListConfigs(
                    WHERE config_id = sc.id
                    ORDER BY position ASC, group_id ASC
                 ) AS sub
-            ) AS group_ids_json
+            ) AS group_ids_json,
+            (SELECT json_group_array(tag) FROM sb_config_link_tags WHERE config_id = sc.id) AS tag_names_json
        FROM sb_configs sc
        LEFT JOIN sb_base_configs bc ON bc.id = sc.base_config_id
        ORDER BY sc.created_at DESC`,
@@ -239,8 +316,12 @@ async function handleUpdateConfig(
     baseConfigId?: string;
     selectorTags?: string[];
     groupIds?: string[];
+    tagNames?: string[];
   }>(request);
   if (!body) return errorResponse('Invalid JSON payload', 400);
+  const tagNames = body.tagNames === undefined ? undefined : parseLinkTagNames(body.tagNames);
+  if (tagNames === null)
+    return errorResponse('`tagNames` must contain non-empty strings up to 64 characters', 422);
 
   const updates: string[] = [];
   const bindings: unknown[] = [];
@@ -285,10 +366,9 @@ async function handleUpdateConfig(
 
   if (updates.length > 0) {
     updates.push("updated_at = strftime('%s','now')");
-    const statement = env.DB.prepare(`UPDATE sb_configs SET ${updates.join(', ')} WHERE id = ?`).bind(
-      ...bindings,
-      configId,
-    );
+    const statement = env.DB.prepare(
+      `UPDATE sb_configs SET ${updates.join(', ')} WHERE id = ?`,
+    ).bind(...bindings, configId);
     const result = await statement.run();
     if (!result.success) {
       console.error('Failed to update sb_configs', result.error);
@@ -299,9 +379,13 @@ async function handleUpdateConfig(
   let groupIds = body.groupIds;
   if (body.groupIds !== undefined) {
     groupIds = Array.isArray(body.groupIds)
-      ? Array.from(new Set(body.groupIds.filter((gid) => typeof gid === 'string' && gid.length > 0)))
+      ? Array.from(
+          new Set(body.groupIds.filter((gid) => typeof gid === 'string' && gid.length > 0)),
+        )
       : [];
-    const clear = await env.DB.prepare(`DELETE FROM sb_config_groups WHERE config_id = ?`).bind(configId).run();
+    const clear = await env.DB.prepare(`DELETE FROM sb_config_groups WHERE config_id = ?`)
+      .bind(configId)
+      .run();
     if (!clear.success) {
       console.error('Failed to clear sb_config_groups', clear.error);
       return errorResponse('Failed to update groups', 500);
@@ -310,7 +394,10 @@ async function handleUpdateConfig(
       const groups = await fetchGroupsByIds(env, groupIds);
       const foundIds = new Set(groups.map((group) => group.id));
       const missing = groupIds.filter((gid) => !foundIds.has(gid));
-      if (missing.length > 0) return errorResponse('Some groupIds were not found', 404, { groupIds: missing });
+      if (missing.length > 0)
+        return errorResponse('Some groupIds were not found', 404, {
+          groupIds: missing,
+        });
       const statements = groupIds.map((groupId, index) =>
         env.DB.prepare(
           `INSERT INTO sb_config_groups (config_id, group_id, position)
@@ -321,8 +408,24 @@ async function handleUpdateConfig(
     }
   }
 
+  if (tagNames !== undefined) {
+    await env.DB.batch([
+      env.DB.prepare(`DELETE FROM sb_config_link_tags WHERE config_id = ?`).bind(configId),
+      ...tagNames.map((tag) =>
+        env.DB.prepare(`INSERT INTO sb_config_link_tags (config_id, tag) VALUES (?, ?)`).bind(
+          configId,
+          tag,
+        ),
+      ),
+    ]);
+  }
+
   const updated = await env.DB.prepare<
-    SbConfigRow & { base_config_name: string | null; group_ids_json: string | null }
+    SbConfigRow & {
+      base_config_name: string | null;
+      group_ids_json: string | null;
+      tag_names_json: string | null;
+    }
   >(
     `SELECT sc.id,
             sc.base_config_id,
@@ -342,7 +445,8 @@ async function handleUpdateConfig(
                    WHERE config_id = sc.id
                    ORDER BY position ASC, group_id ASC
                 ) AS sub
-            ) AS group_ids_json
+            ) AS group_ids_json,
+            (SELECT json_group_array(tag) FROM sb_config_link_tags WHERE config_id = sc.id) AS tag_names_json
        FROM sb_configs sc
        LEFT JOIN sb_base_configs bc ON bc.id = sc.base_config_id
       WHERE sc.id = ?`,
@@ -357,6 +461,7 @@ async function handleUpdateConfig(
     base_config_name: baseConfigName ?? updated.base_config_name,
     selector_tags: selectorTags,
     group_ids: groupIds !== undefined ? groupIds : parseGroupIds(updated.group_ids_json),
+    tag_names: tagNames !== undefined ? tagNames : parseStoredTagNames(updated.tag_names_json),
   });
 }
 
@@ -372,13 +477,17 @@ async function handleDeleteConfig(
   const existing = await fetchConfigById(env, configId);
   if (!existing) return errorResponse('Config not found', 404);
 
-  const deleteGroups = await env.DB.prepare(`DELETE FROM sb_config_groups WHERE config_id = ?`).bind(configId).run();
+  const deleteGroups = await env.DB.prepare(`DELETE FROM sb_config_groups WHERE config_id = ?`)
+    .bind(configId)
+    .run();
   if (!deleteGroups.success) {
     console.error('Failed to delete sb_config_groups', deleteGroups.error);
     return errorResponse('Failed to delete config', 500);
   }
 
-  const deleteConfig = await env.DB.prepare(`DELETE FROM sb_configs WHERE id = ?`).bind(configId).run();
+  const deleteConfig = await env.DB.prepare(`DELETE FROM sb_configs WHERE id = ?`)
+    .bind(configId)
+    .run();
   if (!deleteConfig.success) {
     console.error('Failed to delete sb_configs', deleteConfig.error);
     return errorResponse('Failed to delete config', 500);
@@ -564,8 +673,7 @@ async function handleGetConfig(
 
   const overrideSelectorTags = parseSelectorTags(configRow.selector_tags);
   const baseSelectorTags = parseSelectorTags(baseConfigRow.selector_tags);
-  const selectorTags =
-    overrideSelectorTags.length > 0 ? overrideSelectorTags : baseSelectorTags;
+  const selectorTags = overrideSelectorTags.length > 0 ? overrideSelectorTags : baseSelectorTags;
   const renderConfig = parseBaseConfig(baseConfigRow.config_json);
 
   const allLinks = await collectConfigLinks(env, configId);
@@ -575,7 +683,6 @@ async function handleGetConfig(
 
   const outbounds = await convertLinksToOutbounds(allLinks);
   mergeGeneratedOutbounds(renderConfig, outbounds, selectorTags);
-  stripUnsupportedOutboundFields(renderConfig);
   return jsonResponse(renderConfig);
 }
 

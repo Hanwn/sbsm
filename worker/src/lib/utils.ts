@@ -7,6 +7,17 @@ export function deriveNameFromLink(link: string): string {
       return link.slice(hashIndex + 1);
     }
   }
+  if (link.startsWith('vmess://')) {
+    try {
+      const encoded = link.slice('vmess://'.length).trim().replace(/-/g, '+').replace(/_/g, '/');
+      const padded = encoded.padEnd(Math.ceil(encoded.length / 4) * 4, '=');
+      const bytes = Uint8Array.from(atob(padded), (character) => character.charCodeAt(0));
+      const parsed = JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>;
+      if (typeof parsed.ps === 'string' && parsed.ps.trim()) return parsed.ps.trim();
+    } catch {
+      // Keep the generic fallback for malformed or unsupported links.
+    }
+  }
   try {
     const url = new URL(link);
     return url.hostname;

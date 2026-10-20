@@ -38,7 +38,7 @@ cd worker
 npm install
 cp wrangler.toml.example wrangler.toml
 # Fill in your Cloudflare account_id, D1 database_id, and bindings
-npm run migrate --remote   # Apply migrations to the D1 database
+npm run migrate -- --remote   # Apply migrations to the remote D1 database
 ```
 
 ### 3. Deploy to Cloudflare
@@ -74,7 +74,7 @@ Then visit your deployed dashboard, log in with your configured credentials, and
 | ------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | `worker/src/`       | Cloudflare Worker entrypoint (`index.ts`), route handlers (`routes/`), database layer (`db/`), and shared utilities (`lib/`). |
 | `frontend/src/app/` | Next.js 13+ app router, layouts, routes, and metadata. Components and hooks live under `components/` and `hooks/`.            |
-| `migrations/`       | D1 schema migrations (`0001_init.sql`) defining VPN link, group, subscription, and configuration tables.                      |
+| `migrations/`       | D1 schema migrations for VPN links, groups, tags, subscriptions, and configurations.                      |
 | `docs/`             | Design notes, frontend guidelines, and operational walkthroughs.                                                              |
 
 ---

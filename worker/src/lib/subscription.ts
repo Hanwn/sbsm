@@ -7,9 +7,7 @@ const SUBSCRIPTION_CACHE_TTL_SECONDS = 300;
 export const DEFAULT_EXCLUDE_KEYWORDS = ['流量', '套餐', '到期', '剩余'];
 
 function cleanKeywords(input: string[]): string[] {
-  const trimmed = input
-    .map((value) => value.trim())
-    .filter((value) => value.length > 0);
+  const trimmed = input.map((value) => value.trim()).filter((value) => value.length > 0);
   const unique = Array.from(new Set(trimmed));
   return unique.length > 0 ? unique : [...DEFAULT_EXCLUDE_KEYWORDS];
 }
@@ -154,6 +152,7 @@ export function convertPayloadToLinks(
     id: `subscription:${groupId}:${index}`,
     name: deriveNameFromLink(entry),
     raw_link: entry,
+    tag: null,
     created_at: timestamp,
     updated_at: timestamp,
   }));
@@ -171,8 +170,7 @@ function extractSubscriptionEntries(payload: string, excludeKeywords: string[]):
       const derivedName = deriveNameFromLink(line);
       return !keywords.some(
         (keyword) =>
-          keyword.length > 0 &&
-          (derivedName.includes(keyword) || line.includes(keyword)),
+          keyword.length > 0 && (derivedName.includes(keyword) || line.includes(keyword)),
       );
     });
 }
@@ -191,8 +189,7 @@ function decodeBase64(data: string): string {
   const normalized = data.replace(/\s+/g, '');
   const sanitized = normalized.replace(/-/g, '+').replace(/_/g, '/');
   const padding = sanitized.length % 4;
-  const padded =
-    padding === 0 ? sanitized : sanitized + '='.repeat((4 - padding) % 4);
+  const padded = padding === 0 ? sanitized : sanitized + '='.repeat((4 - padding) % 4);
   try {
     return atob(padded);
   } catch (error) {

@@ -6,7 +6,7 @@ export async function fetchLinksByIds(env: Env, ids: string[]): Promise<VpnLinkR
   if (ids.length === 0) return [];
   const { clause, bindings } = createInClause(ids);
   const statement = env.DB.prepare<VpnLinkRow>(
-    `SELECT id, name, raw_link, created_at, updated_at
+    `SELECT id, name, raw_link, tag, created_at, updated_at
        FROM vpn_links
        WHERE id IN ${clause}`,
   ).bind(...bindings);

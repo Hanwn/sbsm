@@ -10,16 +10,38 @@ import {
   BreadcrumbList,
   BreadcrumbPage,
 } from "@/components/ui/breadcrumb";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { apiFetch } from "@/lib/api-client";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { getLinkProtocolLabel } from "@/lib/link-protocol";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 type GroupType = "manual" | "subscription";
 
@@ -36,9 +58,11 @@ type VpnGroup = {
   name: string;
   description: string | null;
   type: GroupType;
+  tag: string | null;
   created_at: number;
   updated_at: number;
   link_ids: string[];
+  tag_names: string[];
   subscription: SubscriptionMetadata | null;
 };
 
@@ -58,7 +82,8 @@ function normalizeGroup(group: VpnGroup): VpnGroup {
     ? {
         ...group.subscription,
         exclude_keywords:
-          Array.isArray(group.subscription.exclude_keywords) && group.subscription.exclude_keywords.length > 0
+          Array.isArray(group.subscription.exclude_keywords) &&
+          group.subscription.exclude_keywords.length > 0
             ? group.subscription.exclude_keywords
             : [...DEFAULT_SUBSCRIPTION_KEYWORDS],
       }
@@ -66,6 +91,8 @@ function normalizeGroup(group: VpnGroup): VpnGroup {
   return {
     ...group,
     link_ids: group.link_ids ?? [],
+    tag_names: group.tag_names ?? [],
+    tag: group.tag ?? null,
     subscription,
   };
 }
@@ -74,6 +101,7 @@ type VpnLink = {
   id: string;
   name: string | null;
   raw_link: string;
+  tag: string | null;
 };
 
 type AlertState =
@@ -92,29 +120,33 @@ export default function GroupsPage() {
   const [createDescription, setCreateDescription] = useState("");
   const [createType, setCreateType] = useState<GroupType>("manual");
   const [createSelection, setCreateSelection] = useState<Set<string>>(new Set());
+  const [createTagSelection, setCreateTagSelection] = useState<Set<string>>(new Set());
   const [createSubscriptionUrl, setCreateSubscriptionUrl] = useState("");
+  const [createSubscriptionTag, setCreateSubscriptionTag] = useState("");
   const [createSubscriptionFilters, setCreateSubscriptionFilters] = useState(
-    DEFAULT_SUBSCRIPTION_KEYWORDS.join("\n")
+    DEFAULT_SUBSCRIPTION_KEYWORDS.join("\n"),
   );
   const [submitting, setSubmitting] = useState(false);
 
   const [editGroupId, setEditGroupId] = useState<string | null>(null);
   const [editSelection, setEditSelection] = useState<Set<string>>(new Set());
+  const [editTagSelection, setEditTagSelection] = useState<Set<string>>(new Set());
   const [editSubmitting, setEditSubmitting] = useState(false);
 
   const [subscriptionTarget, setSubscriptionTarget] = useState<VpnGroup | null>(null);
   const [subscriptionName, setSubscriptionName] = useState("");
   const [subscriptionDescription, setSubscriptionDescription] = useState("");
   const [subscriptionUrl, setSubscriptionUrl] = useState("");
+  const [subscriptionTag, setSubscriptionTag] = useState("");
   const [subscriptionFilters, setSubscriptionFilters] = useState(
-    DEFAULT_SUBSCRIPTION_KEYWORDS.join("\n")
+    DEFAULT_SUBSCRIPTION_KEYWORDS.join("\n"),
   );
   const [subscriptionSubmitting, setSubscriptionSubmitting] = useState(false);
   const [refreshingSubscriptionId, setRefreshingSubscriptionId] = useState<string | null>(null);
 
   const sortedGroups = useMemo(
     () => [...groups].sort((a, b) => b.created_at - a.created_at),
-    [groups]
+    [groups],
   );
 
   const linkLookup = useMemo(() => {
@@ -124,6 +156,20 @@ export default function GroupsPage() {
     }
     return map;
   }, [links]);
+
+  const availableTags = useMemo(
+    () =>
+      [
+        ...new Set(
+          [
+            ...links.map((link) => link.tag),
+            ...groups.map((group) => group.tag),
+            ...groups.flatMap((group) => group.tag_names ?? []),
+          ].filter((tag): tag is string => Boolean(tag)),
+        ),
+      ].sort((a, b) => a.localeCompare(b)),
+    [links, groups],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -182,6 +228,16 @@ export default function GroupsPage() {
     });
   }
 
+  function toggleTagSelection(tag: string, editing: boolean) {
+    const setter = editing ? setEditTagSelection : setCreateTagSelection;
+    setter((previous) => {
+      const next = new Set(previous);
+      if (next.has(tag)) next.delete(tag);
+      else next.add(tag);
+      return next;
+    });
+  }
+
   async function handleCreateGroup(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const trimmedName = createName.trim();
@@ -210,12 +266,14 @@ export default function GroupsPage() {
               description: createDescription.trim() || undefined,
               type: "manual",
               linkIds: Array.from(createSelection),
+              tagNames: Array.from(createTagSelection),
             }
           : {
               name: trimmedName,
               description: createDescription.trim() || undefined,
               type: "subscription",
               subscriptionUrl: createSubscriptionUrl.trim(),
+              tag: createSubscriptionTag.trim() || null,
               excludeKeywords: parseKeywordInput(createSubscriptionFilters),
             };
       const created = await apiFetch<VpnGroup>("/api/groups", {
@@ -232,7 +290,9 @@ export default function GroupsPage() {
       setCreateDescription("");
       setCreateType("manual");
       setCreateSelection(new Set());
+      setCreateTagSelection(new Set());
       setCreateSubscriptionUrl("");
+      setCreateSubscriptionTag("");
       setCreateSubscriptionFilters(DEFAULT_SUBSCRIPTION_KEYWORDS.join("\n"));
       setCreateDialogOpen(false);
     } catch (error) {
@@ -256,6 +316,10 @@ export default function GroupsPage() {
     }
     const original = new Set(group.link_ids ?? []);
     const selected = new Set(editSelection);
+    const selectedTags = Array.from(editTagSelection);
+    const tagsChanged =
+      selectedTags.length !== group.tag_names.length ||
+      selectedTags.some((tag) => !group.tag_names.includes(tag));
     const toAdd: string[] = [];
     const toRemove: string[] = [];
 
@@ -270,7 +334,7 @@ export default function GroupsPage() {
       }
     }
 
-    if (toAdd.length === 0 && toRemove.length === 0) {
+    if (toAdd.length === 0 && toRemove.length === 0 && !tagsChanged) {
       setEditGroupId(null);
       setEditSelection(new Set());
       setAlert({
@@ -296,9 +360,18 @@ export default function GroupsPage() {
         });
       }
 
+      if (tagsChanged) {
+        await apiFetch(`/api/groups/${group.id}/tags`, {
+          method: "PUT",
+          body: JSON.stringify({ tagNames: selectedTags }),
+        });
+      }
+
       const nextLinks = Array.from(selected);
       setGroups((prev) =>
-        prev.map((item) => (item.id === group.id ? { ...item, link_ids: nextLinks } : item))
+        prev.map((item) =>
+          item.id === group.id ? { ...item, link_ids: nextLinks, tag_names: selectedTags } : item,
+        ),
       );
       setAlert({
         type: "success",
@@ -307,6 +380,7 @@ export default function GroupsPage() {
       });
       setEditGroupId(null);
       setEditSelection(new Set());
+      setEditTagSelection(new Set());
     } catch (error) {
       console.error("Failed to update group nodes", error);
       setAlert({
@@ -324,8 +398,9 @@ export default function GroupsPage() {
     setSubscriptionName(group.name);
     setSubscriptionDescription(group.description ?? "");
     setSubscriptionUrl(group.subscription?.url ?? "");
+    setSubscriptionTag(group.tag ?? "");
     setSubscriptionFilters(
-      (group.subscription?.exclude_keywords ?? DEFAULT_SUBSCRIPTION_KEYWORDS).join("\n")
+      (group.subscription?.exclude_keywords ?? DEFAULT_SUBSCRIPTION_KEYWORDS).join("\n"),
     );
   }
 
@@ -356,12 +431,16 @@ export default function GroupsPage() {
         name: trimmedName,
         description: subscriptionDescription.trim() || null,
         subscriptionUrl: trimmedUrl,
+        tag: subscriptionTag.trim() || null,
         excludeKeywords: parseKeywordInput(subscriptionFilters),
       };
-      const updated = await apiFetch<VpnGroup>(`/api/groups/${subscriptionTarget.id}/subscription`, {
-        method: "PUT",
-        body: JSON.stringify(payload),
-      });
+      const updated = await apiFetch<VpnGroup>(
+        `/api/groups/${subscriptionTarget.id}/subscription`,
+        {
+          method: "PUT",
+          body: JSON.stringify(payload),
+        },
+      );
       const normalized = normalizeGroup(updated);
       setGroups((prev) => prev.map((item) => (item.id === normalized.id ? normalized : item)));
       setAlert({
@@ -376,7 +455,10 @@ export default function GroupsPage() {
       setAlert({
         type: "error",
         title: "Failed to update subscription",
-        message: error instanceof Error ? error.message : "Unexpected error updating the subscription group.",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Unexpected error updating the subscription group.",
       });
     } finally {
       setSubscriptionSubmitting(false);
@@ -397,7 +479,7 @@ export default function GroupsPage() {
         setSubscriptionDescription(normalized.description ?? "");
         setSubscriptionUrl(normalized.subscription?.url ?? "");
         setSubscriptionFilters(
-          (normalized.subscription?.exclude_keywords ?? DEFAULT_SUBSCRIPTION_KEYWORDS).join("\n")
+          (normalized.subscription?.exclude_keywords ?? DEFAULT_SUBSCRIPTION_KEYWORDS).join("\n"),
         );
       }
       setAlert({
@@ -410,7 +492,8 @@ export default function GroupsPage() {
       setAlert({
         type: "error",
         title: "Failed to refresh",
-        message: error instanceof Error ? error.message : "Unexpected error refreshing the subscription.",
+        message:
+          error instanceof Error ? error.message : "Unexpected error refreshing the subscription.",
       });
     } finally {
       setRefreshingSubscriptionId(null);
@@ -439,7 +522,9 @@ export default function GroupsPage() {
                 setCreateDescription("");
                 setCreateType("manual");
                 setCreateSelection(new Set());
+                setCreateTagSelection(new Set());
                 setCreateSubscriptionUrl("");
+                setCreateSubscriptionTag("");
                 setCreateSubscriptionFilters(DEFAULT_SUBSCRIPTION_KEYWORDS.join("\n"));
               }
             }}
@@ -451,7 +536,8 @@ export default function GroupsPage() {
               <DialogHeader>
                 <DialogTitle>New VPN group</DialogTitle>
                 <DialogDescription>
-                  Organize VPN nodes to reuse selectors in sing-box configs or sync from subscription URLs.
+                  Organize VPN nodes to reuse selectors in sing-box configs or sync from
+                  subscription URLs.
                 </DialogDescription>
               </DialogHeader>
               <form className="flex flex-col gap-4" onSubmit={handleCreateGroup}>
@@ -483,9 +569,11 @@ export default function GroupsPage() {
                       setCreateType(nextType);
                       if (nextType === "manual") {
                         setCreateSubscriptionUrl("");
+                        setCreateSubscriptionTag("");
                         setCreateSubscriptionFilters(DEFAULT_SUBSCRIPTION_KEYWORDS.join("\n"));
                       } else {
                         setCreateSelection(new Set());
+                        setCreateTagSelection(new Set());
                         if (createSubscriptionFilters.trim().length === 0) {
                           setCreateSubscriptionFilters(DEFAULT_SUBSCRIPTION_KEYWORDS.join("\n"));
                         }
@@ -496,14 +584,40 @@ export default function GroupsPage() {
                       <SelectValue placeholder="Select group type" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="manual">Manual (pick nodes)</SelectItem>
+                      <SelectItem value="manual">Manual (pick nodes or tags)</SelectItem>
                       <SelectItem value="subscription">Subscription (auto updates)</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
                 {createType === "manual" ? (
                   <div className="grid gap-3">
+                    <Label>Include tags</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Current and future VPN nodes and subscription groups with a selected tag are
+                      included automatically.
+                    </p>
+                    <div className="max-h-32 overflow-y-auto rounded-lg border p-3">
+                      {availableTags.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">
+                          No tags yet. Add a tag to a VPN node first.
+                        </p>
+                      ) : (
+                        availableTags.map((tag) => (
+                          <label key={tag} className="flex items-center gap-2 py-1 text-sm">
+                            <Checkbox
+                              checked={createTagSelection.has(tag)}
+                              onCheckedChange={() => toggleTagSelection(tag, false)}
+                            />
+                            <span>{tag}</span>
+                          </label>
+                        ))
+                      )}
+                    </div>
                     <Label>Attach VPN nodes</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Specific nodes stay in this group even if their tag changes. A node selected
+                      here and by tag appears once.
+                    </p>
                     <div className="max-h-48 overflow-y-auto rounded-lg border p-3">
                       {links.length === 0 ? (
                         <p className="text-sm text-muted-foreground">
@@ -520,8 +634,12 @@ export default function GroupsPage() {
                                   onCheckedChange={() => toggleCreateSelection(link.id)}
                                 />
                                 <span className="flex flex-col">
-                                  <span className="font-medium leading-none">{displayName}</span>
-                                  <span className="text-xs text-muted-foreground">{link.raw_link}</span>
+                                  <span className="font-medium leading-none">
+                                    {displayName} · {getLinkProtocolLabel(link.raw_link)}
+                                  </span>
+                                  <span className="text-xs text-muted-foreground">
+                                    {link.raw_link}
+                                  </span>
                                 </span>
                               </label>
                             );
@@ -532,6 +650,17 @@ export default function GroupsPage() {
                   </div>
                 ) : (
                   <div className="grid gap-2">
+                    <Label htmlFor="group-subscription-tag">Tag</Label>
+                    <Input
+                      id="group-subscription-tag"
+                      value={createSubscriptionTag}
+                      onChange={(event) => setCreateSubscriptionTag(event.target.value)}
+                      maxLength={64}
+                      placeholder="US subscriptions"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Rendered configs selecting this tag include this subscription automatically.
+                    </p>
                     <Label htmlFor="group-subscription-url">Subscription link</Label>
                     <Input
                       id="group-subscription-url"
@@ -541,7 +670,8 @@ export default function GroupsPage() {
                       required
                     />
                     <p className="text-xs text-muted-foreground">
-                      The latest nodes will be pulled from this link whenever configs use this group.
+                      The latest nodes will be pulled from this link whenever configs use this
+                      group.
                     </p>
                     <div className="grid gap-2">
                       <Label htmlFor="group-subscription-filters">Exclude keywords</Label>
@@ -552,14 +682,18 @@ export default function GroupsPage() {
                         placeholder={DEFAULT_SUBSCRIPTION_KEYWORDS.join(",")}
                       />
                       <p className="text-xs text-muted-foreground">
-                        Nodes whose names contain any of these keywords will be ignored. Separate values with commas or
-                        new lines.
+                        Nodes whose names contain any of these keywords will be ignored. Separate
+                        values with commas or new lines.
                       </p>
                     </div>
                   </div>
                 )}
                 <DialogFooter>
-                  <Button type="button" variant="outline" onClick={() => setCreateDialogOpen(false)}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setCreateDialogOpen(false)}
+                  >
                     Cancel
                   </Button>
                   <Button type="submit" disabled={submitting}>
@@ -586,7 +720,9 @@ export default function GroupsPage() {
           <CardContent>
             {sortedGroups.length === 0 ? (
               <div className="flex flex-col items-center justify-center gap-2 py-10 text-center text-sm text-muted-foreground">
-                {loading ? "Fetching groups from the worker…" : "No VPN groups yet. Create one to organize nodes."}
+                {loading
+                  ? "Fetching groups from the worker…"
+                  : "No VPN groups yet. Create one to organize nodes."}
               </div>
             ) : (
               <>
@@ -621,24 +757,38 @@ export default function GroupsPage() {
                       return (
                         <TableRow key={group.id}>
                           <TableCell className="font-medium">{group.name}</TableCell>
-                          <TableCell className="text-xs text-muted-foreground capitalize">{group.type}</TableCell>
+                          <TableCell className="text-xs text-muted-foreground capitalize">
+                            {group.type}
+                            {group.type === "subscription" && group.tag ? (
+                              <span className="block normal-case">Tag: {group.tag}</span>
+                            ) : null}
+                          </TableCell>
                           <TableCell className="max-w-[360px] text-sm text-muted-foreground">
                             {group.description ?? "—"}
                           </TableCell>
                           <TableCell className="max-w-[320px] text-xs text-muted-foreground">
                             {group.type === "manual" ? (
-                              totalManualLinks === 0 ? (
-                                "—"
-                              ) : visibleManualNames.length > 0 ? (
-                                <>
-                                  <span>{visibleManualNames.join(", ")}</span>
-                                  {remainingManualCount > 0 ? (
-                                    <span className="ml-1 text-muted-foreground/70">+{remainingManualCount} more</span>
-                                  ) : null}
-                                </>
-                              ) : (
-                                `${totalManualLinks} node${totalManualLinks === 1 ? "" : "s"}`
-                              )
+                              <div className="space-y-1">
+                                <div>
+                                  {group.tag_names.length
+                                    ? `Tags: ${group.tag_names.join(", ")}`
+                                    : "No tags selected"}
+                                </div>
+                                <div>
+                                  {totalManualLinks === 0 ? (
+                                    "No specific nodes"
+                                  ) : visibleManualNames.length > 0 ? (
+                                    <>
+                                      {visibleManualNames.join(", ")}
+                                      {remainingManualCount > 0
+                                        ? ` +${remainingManualCount} more`
+                                        : ""}
+                                    </>
+                                  ) : (
+                                    `${totalManualLinks} specific node${totalManualLinks === 1 ? "" : "s"}`
+                                  )}
+                                </div>
+                              </div>
                             ) : subscriptionInfo ? (
                               <div className="space-y-1">
                                 <span>
@@ -648,7 +798,9 @@ export default function GroupsPage() {
                                 <span className="block text-muted-foreground/70">
                                   Last refresh:{" "}
                                   {subscriptionInfo.last_fetched_at
-                                    ? new Date(subscriptionInfo.last_fetched_at * 1000).toLocaleString()
+                                    ? new Date(
+                                        subscriptionInfo.last_fetched_at * 1000,
+                                      ).toLocaleString()
                                     : "Never"}
                                 </span>
                                 {subscriptionInfo.exclude_keywords.length > 0 ? (
@@ -677,29 +829,63 @@ export default function GroupsPage() {
                                   if (open) {
                                     setEditGroupId(group.id);
                                     setEditSelection(new Set(group.link_ids ?? []));
+                                    setEditTagSelection(new Set(group.tag_names ?? []));
                                   } else if (editGroupId === group.id) {
                                     setEditGroupId(null);
                                     setEditSelection(new Set());
+                                    setEditTagSelection(new Set());
                                     setEditSubmitting(false);
                                   }
                                 }}
                               >
                                 <DialogTrigger asChild>
                                   <Button variant="outline" size="sm">
-                                    Edit nodes
+                                    Edit nodes and tags
                                   </Button>
                                 </DialogTrigger>
                                 <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
                                   <DialogHeader>
-                                    <DialogTitle>Edit VPN nodes for {group.name}</DialogTitle>
+                                    <DialogTitle>Edit nodes and tags for {group.name}</DialogTitle>
                                     <DialogDescription>
-                                      Toggle VPN nodes to attach or remove them from this group.
+                                      Select tags for automatic membership and individual nodes for
+                                      direct membership.
                                     </DialogDescription>
                                   </DialogHeader>
                                   <form
                                     className="flex flex-col gap-4"
                                     onSubmit={(event) => handleUpdateGroupLinks(event, group)}
                                   >
+                                    <div className="space-y-2">
+                                      <Label>Include tags</Label>
+                                      <div className="max-h-32 overflow-y-auto rounded-lg border p-3">
+                                        {availableTags.length === 0 ? (
+                                          <p className="text-sm text-muted-foreground">
+                                            No tags available.
+                                          </p>
+                                        ) : (
+                                          availableTags.map((tag) => (
+                                            <label
+                                              key={tag}
+                                              className="flex items-center gap-2 py-1 text-sm"
+                                            >
+                                              <Checkbox
+                                                checked={editTagSelection.has(tag)}
+                                                onCheckedChange={() =>
+                                                  toggleTagSelection(tag, true)
+                                                }
+                                                disabled={editSubmitting}
+                                              />
+                                              <span>{tag}</span>
+                                            </label>
+                                          ))
+                                        )}
+                                      </div>
+                                    </div>
+                                    <Label>Specific VPN nodes</Label>
+                                    <p className="text-xs text-muted-foreground">
+                                      Nodes matching a selected tag remain included even when
+                                      unchecked here.
+                                    </p>
                                     <div className="max-h-60 overflow-y-auto rounded-lg border p-3">
                                       {links.length === 0 ? (
                                         <p className="text-sm text-muted-foreground">
@@ -708,16 +894,26 @@ export default function GroupsPage() {
                                       ) : (
                                         <div className="space-y-2">
                                           {links.map((link) => {
-                                            const displayName = link.name?.length ? link.name : "Unnamed node";
+                                            const displayName = link.name?.length
+                                              ? link.name
+                                              : "Unnamed node";
                                             return (
-                                              <label key={link.id} className="flex items-start gap-2 text-sm">
+                                              <label
+                                                key={link.id}
+                                                className="flex items-start gap-2 text-sm"
+                                              >
                                                 <Checkbox
                                                   checked={editSelection.has(link.id)}
-                                                  onCheckedChange={() => toggleEditSelection(link.id)}
+                                                  onCheckedChange={() =>
+                                                    toggleEditSelection(link.id)
+                                                  }
                                                   disabled={editSubmitting}
                                                 />
                                                 <span className="flex flex-col">
-                                                  <span className="font-medium leading-none">{displayName}</span>
+                                                  <span className="font-medium leading-none">
+                                                    {displayName} ·{" "}
+                                                    {getLinkProtocolLabel(link.raw_link)}
+                                                  </span>
                                                   <span className="text-xs font-mono text-muted-foreground break-all">
                                                     {link.raw_link}
                                                   </span>
@@ -735,13 +931,14 @@ export default function GroupsPage() {
                                         onClick={() => {
                                           setEditGroupId(null);
                                           setEditSelection(new Set());
+                                          setEditTagSelection(new Set());
                                           setEditSubmitting(false);
                                         }}
                                         disabled={editSubmitting}
                                       >
                                         Cancel
                                       </Button>
-                                      <Button type="submit" disabled={editSubmitting || links.length === 0}>
+                                      <Button type="submit" disabled={editSubmitting}>
                                         {editSubmitting ? "Saving…" : "Save changes"}
                                       </Button>
                                     </DialogFooter>
@@ -750,7 +947,11 @@ export default function GroupsPage() {
                               </Dialog>
                             ) : (
                               <div className="flex flex-wrap justify-end gap-2">
-                                <Button variant="outline" size="sm" onClick={() => openSubscriptionDialog(group)}>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => openSubscriptionDialog(group)}
+                                >
                                   Edit subscription
                                 </Button>
                                 <Button
@@ -759,7 +960,9 @@ export default function GroupsPage() {
                                   onClick={() => handleRefreshSubscription(group)}
                                   disabled={refreshingSubscriptionId === group.id}
                                 >
-                                  {refreshingSubscriptionId === group.id ? "Refreshing…" : "Refresh"}
+                                  {refreshingSubscriptionId === group.id
+                                    ? "Refreshing…"
+                                    : "Refresh"}
                                 </Button>
                               </div>
                             )}
@@ -770,8 +973,8 @@ export default function GroupsPage() {
                   </TableBody>
                 </Table>
                 <p className="mt-4 text-sm text-muted-foreground">
-                  Groups reference stored VPN nodes or subscription feeds when generating configs. Duplicate
-                  attachments are ignored by the worker.
+                  Groups reference stored VPN nodes or subscription feeds when generating configs.
+                  Duplicate attachments are ignored by the worker.
                 </p>
               </>
             )}
@@ -788,6 +991,7 @@ export default function GroupsPage() {
             setSubscriptionName("");
             setSubscriptionDescription("");
             setSubscriptionUrl("");
+            setSubscriptionTag("");
             setSubscriptionFilters(DEFAULT_SUBSCRIPTION_KEYWORDS.join("\n"));
           }
         }}
@@ -795,7 +999,9 @@ export default function GroupsPage() {
         <DialogContent className="max-w-xl">
           <DialogHeader>
             <DialogTitle>Edit subscription group</DialogTitle>
-            <DialogDescription>Update the group details or replace the subscription URL.</DialogDescription>
+            <DialogDescription>
+              Update the group details or replace the subscription URL.
+            </DialogDescription>
           </DialogHeader>
           {subscriptionTarget && (
             <form className="flex flex-col gap-4" onSubmit={handleUpdateSubscription}>
@@ -818,6 +1024,19 @@ export default function GroupsPage() {
                 />
               </div>
               <div className="grid gap-2">
+                <Label htmlFor="subscription-tag">Tag</Label>
+                <Input
+                  id="subscription-tag"
+                  value={subscriptionTag}
+                  onChange={(event) => setSubscriptionTag(event.target.value)}
+                  maxLength={64}
+                  placeholder="US subscriptions"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Rendered configs selecting this tag include this subscription automatically.
+                </p>
+              </div>
+              <div className="grid gap-2">
                 <Label htmlFor="subscription-url">Subscription link</Label>
                 <Input
                   id="subscription-url"
@@ -835,8 +1054,8 @@ export default function GroupsPage() {
                   placeholder={DEFAULT_SUBSCRIPTION_KEYWORDS.join(",")}
                 />
                 <p className="text-xs text-muted-foreground">
-                  Nodes whose names contain any of these keywords will be ignored. Separate values with commas or new
-                  lines.
+                  Nodes whose names contain any of these keywords will be ignored. Separate values
+                  with commas or new lines.
                 </p>
               </div>
               {subscriptionTarget.subscription ? (
@@ -848,7 +1067,9 @@ export default function GroupsPage() {
                   <p>
                     Last refresh:{" "}
                     {subscriptionTarget.subscription.last_fetched_at
-                      ? new Date(subscriptionTarget.subscription.last_fetched_at * 1000).toLocaleString()
+                      ? new Date(
+                          subscriptionTarget.subscription.last_fetched_at * 1000,
+                        ).toLocaleString()
                       : "Never"}
                   </p>
                   {subscriptionTarget.subscription.last_error ? (

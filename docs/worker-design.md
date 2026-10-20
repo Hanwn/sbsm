@@ -98,6 +98,8 @@ CREATE INDEX IF NOT EXISTS idx_sb_config_groups_position ON sb_config_groups(con
 5. Append generated outbounds to the base template, expanding any configured selector tags with the outbound tags (deduplicated).
 6. Return the merged configuration as JSON.
 
+The base template is provided by the user and should match the sing-box version used by the client. The Worker preserves its fields and only generates outbounds from supported VPN links; it does not migrate DNS, route, or other template fields between sing-box versions. Validate the resulting JSON with `sing-box check` on the target version.
+
 ## Implementation Notes
 
 - Admin credentials are injected via Wrangler `vars` (`ADMIN_USERNAME` and `ADMIN_PASSWORD_HASH`, SHA-256 hex of the password). Without them the Worker refuses authentication.

@@ -2,6 +2,7 @@ export interface VpnLinkRow {
   id: string;
   name: string;
   raw_link: string;
+  tag: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -11,6 +12,7 @@ export interface VpnGroupRow {
   name: string;
   description: string | null;
   type: 'manual' | 'subscription';
+  tag: string | null;
   created_at: number;
   updated_at: number;
 }

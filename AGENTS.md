@@ -19,7 +19,8 @@
 - Run Prettier (`npm run format`) before submitting changes; prefer ASCII unless the file already uses Unicode.
 
 ## Testing Guidelines
-- No automated suite yet; validate flows manually via `wrangler dev` plus HTTP clients (Basic Auth, share-token generation).
+- Validate API flows manually via `wrangler dev` plus HTTP clients (Basic Auth, share-token generation).
+- Run converter checks with `cd worker && npm test` (Node.js 22.6+).
 - When adding tests, place Worker-compatible harnesses under `worker/tests/` and document the run command here.
 - Validate schema changes with `npm run migrate` against a fresh D1 instance.
 

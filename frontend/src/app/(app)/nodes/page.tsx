@@ -21,18 +21,35 @@ import {
   BreadcrumbList,
   BreadcrumbPage,
 } from "@/components/ui/breadcrumb";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { apiFetch } from "@/lib/api-client";
+import { getLinkProtocolLabel } from "@/lib/link-protocol";
 
 type VpnLink = {
   id: string;
   name: string | null;
   raw_link: string;
+  tag: string | null;
   created_at: number;
   updated_at: number;
 };
@@ -49,16 +66,18 @@ export default function NodesPage() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
+  const [tag, setTag] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [editTarget, setEditTarget] = useState<VpnLink | null>(null);
   const [editName, setEditName] = useState("");
   const [editUrl, setEditUrl] = useState("");
+  const [editTag, setEditTag] = useState("");
   const [editSubmitting, setEditSubmitting] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const sortedNodes = useMemo(
     () => [...nodes].sort((a, b) => b.created_at - a.created_at),
-    [nodes]
+    [nodes],
   );
 
   useEffect(() => {
@@ -75,7 +94,10 @@ export default function NodesPage() {
           setAlert({
             type: "error",
             title: "Failed to load VPN nodes",
-            message: error instanceof Error ? error.message : "Unexpected error loading node list.",
+            message:
+              error instanceof Error
+                ? error.message
+                : "Unexpected error loading node list.",
           });
         }
       } finally {
@@ -94,7 +116,7 @@ export default function NodesPage() {
       setAlert({
         type: "error",
         title: "Missing VPN link",
-        message: "Please provide a valid VPN subscription URL.",
+        message: "Please provide a VPN node link.",
       });
       return;
     }
@@ -102,7 +124,11 @@ export default function NodesPage() {
     try {
       const trimmedUrl = url.trim();
       const trimmedName = name.trim();
-      const payload = trimmedName.length > 0 ? { url: trimmedUrl, name: trimmedName } : { url: trimmedUrl };
+      const payload = {
+        url: trimmedUrl,
+        name: trimmedName,
+        tag: tag.trim() || null,
+      };
       const created = await apiFetch<VpnLink>("/api/links", {
         method: "POST",
         body: JSON.stringify(payload),
@@ -111,17 +137,21 @@ export default function NodesPage() {
       setAlert({
         type: "success",
         title: "VPN node saved",
-        message: "The VPN subscription link was stored successfully.",
+        message: "The VPN node link was stored successfully.",
       });
       setName("");
       setUrl("");
+      setTag("");
       setCreateDialogOpen(false);
     } catch (error) {
       console.error("Failed to create VPN node", error);
       setAlert({
         type: "error",
         title: "Failed to save node",
-        message: error instanceof Error ? error.message : "Unexpected error saving the node.",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Unexpected error saving the node.",
       });
     } finally {
       setSubmitting(false);
@@ -132,6 +162,7 @@ export default function NodesPage() {
     setEditTarget(node);
     setEditName(node.name ?? "");
     setEditUrl(node.raw_link);
+    setEditTag(node.tag ?? "");
   }
 
   async function handleUpdateNode(event: React.FormEvent<HTMLFormElement>) {
@@ -141,7 +172,7 @@ export default function NodesPage() {
       setAlert({
         type: "error",
         title: "Missing VPN link",
-        message: "Please provide a valid VPN subscription URL.",
+        message: "Please provide a VPN node link.",
       });
       return;
     }
@@ -149,19 +180,22 @@ export default function NodesPage() {
     try {
       const trimmedUrl = editUrl.trim();
       const trimmedName = editName.trim();
-      const payload =
-        trimmedName.length > 0
-          ? { url: trimmedUrl, name: trimmedName }
-          : { url: trimmedUrl, name: "" };
+      const payload = {
+        url: trimmedUrl,
+        name: trimmedName,
+        tag: editTag.trim() || null,
+      };
       const updated = await apiFetch<VpnLink>(`/api/links/${editTarget.id}`, {
         method: "PUT",
         body: JSON.stringify(payload),
       });
-      setNodes((prev) => prev.map((node) => (node.id === updated.id ? updated : node)));
+      setNodes((prev) =>
+        prev.map((node) => (node.id === updated.id ? updated : node)),
+      );
       setAlert({
         type: "success",
         title: "VPN node updated",
-        message: "The VPN subscription link was updated.",
+        message: "The VPN node link was updated.",
       });
       setEditTarget(null);
     } catch (error) {
@@ -169,7 +203,10 @@ export default function NodesPage() {
       setAlert({
         type: "error",
         title: "Failed to update node",
-        message: error instanceof Error ? error.message : "Unexpected error updating the node.",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Unexpected error updating the node.",
       });
     } finally {
       setEditSubmitting(false);
@@ -188,14 +225,17 @@ export default function NodesPage() {
       setAlert({
         type: "success",
         title: "VPN node removed",
-        message: "The VPN subscription link was deleted.",
+        message: "The VPN node link was deleted.",
       });
     } catch (error) {
       console.error("Failed to delete VPN node", error);
       setAlert({
         type: "error",
         title: "Failed to delete node",
-        message: error instanceof Error ? error.message : "Unexpected error deleting the node.",
+        message:
+          error instanceof Error
+            ? error.message
+            : "Unexpected error deleting the node.",
       });
     } finally {
       setDeletingId(null);
@@ -223,7 +263,8 @@ export default function NodesPage() {
               <DialogHeader>
                 <DialogTitle>Add VPN node</DialogTitle>
                 <DialogDescription>
-                  Save a subscription link that can be reused across base configs and groups.
+                  Save a VPN node link that can be reused across configs and
+                  groups.
                 </DialogDescription>
               </DialogHeader>
               <form className="flex flex-col gap-4" onSubmit={handleCreate}>
@@ -240,14 +281,41 @@ export default function NodesPage() {
                   <Label htmlFor="node-url">VPN link</Label>
                   <Input
                     id="node-url"
-                    placeholder="vless://..."
+                    placeholder="tuic://..., hy2://..., anytls://..."
                     value={url}
                     onChange={(event) => setUrl(event.target.value)}
                     required
                   />
+                  <p className="text-xs text-muted-foreground">
+                    Supported: VLESS, VMess, Trojan, Shadowsocks, TUIC,
+                    Hysteria2, AnyTLS.
+                  </p>
+                  {url.trim() && (
+                    <p className="text-xs text-muted-foreground">
+                      Detected protocol: {getLinkProtocolLabel(url)}
+                    </p>
+                  )}
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="node-tag">Tag</Label>
+                  <Input
+                    id="node-tag"
+                    value={tag}
+                    onChange={(event) => setTag(event.target.value)}
+                    maxLength={64}
+                    placeholder="US nodes"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Groups selecting this tag will include this node
+                    automatically.
+                  </p>
                 </div>
                 <DialogFooter>
-                  <Button type="button" variant="outline" onClick={() => setCreateDialogOpen(false)}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setCreateDialogOpen(false)}
+                  >
                     Cancel
                   </Button>
                   <Button type="submit" disabled={submitting}>
@@ -269,12 +337,16 @@ export default function NodesPage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0">
             <CardTitle className="text-lg">Stored VPN nodes</CardTitle>
-            {loading ? <span className="text-sm text-muted-foreground">Loading…</span> : null}
+            {loading ? (
+              <span className="text-sm text-muted-foreground">Loading…</span>
+            ) : null}
           </CardHeader>
           <CardContent>
             {sortedNodes.length === 0 ? (
               <div className="flex flex-col items-center justify-center gap-2 py-10 text-center text-sm text-muted-foreground">
-                {loading ? "Fetching nodes from the worker…" : "No VPN nodes yet. Create one to get started."}
+                {loading
+                  ? "Fetching nodes from the worker…"
+                  : "No VPN nodes yet. Create one to get started."}
               </div>
             ) : (
               <>
@@ -282,7 +354,9 @@ export default function NodesPage() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Name</TableHead>
-                      <TableHead>Subscription link</TableHead>
+                      <TableHead>Protocol</TableHead>
+                      <TableHead>Tag</TableHead>
+                      <TableHead>VPN link</TableHead>
                       <TableHead>Created</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
@@ -293,15 +367,27 @@ export default function NodesPage() {
                         <TableCell className="font-medium">
                           {node.name?.length ? node.name : "Unnamed node"}
                         </TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {getLinkProtocolLabel(node.raw_link)}
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {node.tag || "—"}
+                        </TableCell>
                         <TableCell className="max-w-[420px]">
-                          <span className="block truncate text-xs text-muted-foreground">{node.raw_link}</span>
+                          <span className="block truncate text-xs text-muted-foreground">
+                            {node.raw_link}
+                          </span>
                         </TableCell>
                         <TableCell className="text-xs text-muted-foreground">
                           {new Date(node.created_at * 1000).toLocaleString()}
                         </TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-2">
-                            <Button variant="outline" size="sm" onClick={() => openEditDialog(node)}>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => openEditDialog(node)}
+                            >
                               Edit
                             </Button>
                             <AlertDialog>
@@ -312,11 +398,18 @@ export default function NodesPage() {
                               </AlertDialogTrigger>
                               <AlertDialogContent>
                                 <AlertDialogHeader>
-                                  <AlertDialogTitle>Delete VPN node</AlertDialogTitle>
+                                  <AlertDialogTitle>
+                                    Delete VPN node
+                                  </AlertDialogTitle>
                                   <AlertDialogDescription>
                                     This removes{" "}
-                                    <strong>{node.name?.length ? node.name : "this VPN node"}</strong> from the worker
-                                    and any groups referencing it. Continue?
+                                    <strong>
+                                      {node.name?.length
+                                        ? node.name
+                                        : "this VPN node"}
+                                    </strong>{" "}
+                                    from the worker and any groups referencing
+                                    it. Continue?
                                   </AlertDialogDescription>
                                 </AlertDialogHeader>
                                 <AlertDialogFooter>
@@ -325,7 +418,9 @@ export default function NodesPage() {
                                     onClick={() => confirmDelete(node.id)}
                                     disabled={deletingId === node.id}
                                   >
-                                    {deletingId === node.id ? "Deleting…" : "Delete"}
+                                    {deletingId === node.id
+                                      ? "Deleting…"
+                                      : "Delete"}
                                   </AlertDialogAction>
                                 </AlertDialogFooter>
                               </AlertDialogContent>
@@ -357,7 +452,9 @@ export default function NodesPage() {
         <DialogContent className="max-w-xl">
           <DialogHeader>
             <DialogTitle>Edit VPN node</DialogTitle>
-            <DialogDescription>Update the subscription link or rename this node.</DialogDescription>
+            <DialogDescription>
+              Update the VPN link or rename this node.
+            </DialogDescription>
           </DialogHeader>
           {editTarget && (
             <form className="flex flex-col gap-4" onSubmit={handleUpdateNode}>
@@ -377,6 +474,25 @@ export default function NodesPage() {
                   value={editUrl}
                   onChange={(event) => setEditUrl(event.target.value)}
                   required
+                />
+                <p className="text-xs text-muted-foreground">
+                  Supported: VLESS, VMess, Trojan, Shadowsocks, TUIC, Hysteria2,
+                  AnyTLS.
+                </p>
+                {editUrl.trim() && (
+                  <p className="text-xs text-muted-foreground">
+                    Detected protocol: {getLinkProtocolLabel(editUrl)}
+                  </p>
+                )}
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="edit-node-tag">Tag</Label>
+                <Input
+                  id="edit-node-tag"
+                  value={editTag}
+                  onChange={(event) => setEditTag(event.target.value)}
+                  maxLength={64}
+                  placeholder="US nodes"
                 />
               </div>
               <DialogFooter>

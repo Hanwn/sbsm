@@ -20,7 +20,6 @@ export function parseBaseConfig(raw: string): SingBoxConfig {
     const parsed = JSON.parse(raw) as SingBoxConfig;
     if (parsed && typeof parsed === 'object') {
       if (!Array.isArray(parsed.outbounds)) parsed.outbounds = [];
-      stripUnsupportedOutboundFields(parsed);
       return parsed;
     }
   } catch (error) {
@@ -28,7 +27,6 @@ export function parseBaseConfig(raw: string): SingBoxConfig {
   }
   const fallback = cloneTemplate();
   fallback.outbounds = [];
-  stripUnsupportedOutboundFields(fallback);
   return fallback;
 }
 
@@ -41,12 +39,9 @@ export function normalizeConfigInput(input: unknown): SingBoxConfig {
     if (!cloned.outbounds || !Array.isArray(cloned.outbounds)) {
       cloned.outbounds = [];
     }
-    stripUnsupportedOutboundFields(cloned);
     return cloned;
   }
-  const fallback = cloneTemplate();
-  stripUnsupportedOutboundFields(fallback);
-  return fallback;
+  return cloneTemplate();
 }
 
 export function stringifyConfig(config: SingBoxConfig): string {
@@ -65,7 +60,9 @@ export function mergeGeneratedOutbounds(
 
   if (selectorTags.length === 0) return;
   const newTags = generated
-    .map((item) => (item && typeof item === 'object' ? (item as any).tag : undefined))
+    .map((item) =>
+      item && typeof item === 'object' ? (item as any).tag : undefined,
+    )
     .filter((tag): tag is string => typeof tag === 'string' && tag.length > 0);
   if (newTags.length === 0) return;
 
@@ -85,19 +82,13 @@ export function mergeGeneratedOutbounds(
 }
 
 export function appendUniqueStrings(target: string[], values: string[]): void {
-  const seen = new Set<string>(target.filter((item) => typeof item === 'string'));
+  const seen = new Set<string>(
+    target.filter((item) => typeof item === 'string'),
+  );
   for (const value of values) {
     if (!seen.has(value)) {
       target.push(value);
       seen.add(value);
     }
-  }
-}
-
-export function stripUnsupportedOutboundFields(config: SingBoxConfig): void {
-  if (!Array.isArray(config.outbounds)) return;
-  for (const outbound of config.outbounds) {
-    if (!outbound || typeof outbound !== 'object') continue;
-    delete (outbound as Record<string, unknown>)['domain_resolver'];
   }
 }

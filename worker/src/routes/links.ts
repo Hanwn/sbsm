@@ -13,11 +13,16 @@ async function handleCreateLink(
   const body = await readJsonBody<{
     url?: string;
     name?: string;
+    tag?: string | null;
   }>(request);
   if (!body) return errorResponse('Invalid JSON payload', 400);
 
   const rawLink = body.url?.trim();
   if (!rawLink) return errorResponse('`url` is required', 422);
+  if (body.tag != null && typeof body.tag !== 'string')
+    return errorResponse('`tag` must be a string', 422);
+  const tag = body.tag?.trim() || null;
+  if (tag && tag.length > 64) return errorResponse('`tag` must be at most 64 characters', 422);
 
   const id = crypto.randomUUID();
   const providedName = body.name?.trim();
@@ -25,9 +30,9 @@ async function handleCreateLink(
     providedName && providedName.length > 0 ? providedName : deriveNameFromLink(rawLink).trim();
 
   const insert = await env.DB.prepare(
-    `INSERT INTO vpn_links (id, name, raw_link) VALUES (?, ?, ?)`,
+    `INSERT INTO vpn_links (id, name, raw_link, tag) VALUES (?, ?, ?, ?)`,
   )
-    .bind(id, name, rawLink)
+    .bind(id, name, rawLink, tag)
     .run();
 
   if (!insert.success) {
@@ -36,7 +41,7 @@ async function handleCreateLink(
   }
 
   const { results } = await env.DB.prepare<VpnLinkRow>(
-    `SELECT id, name, raw_link, created_at, updated_at
+    `SELECT id, name, raw_link, tag, created_at, updated_at
        FROM vpn_links WHERE id = ?`,
   )
     .bind(id)
@@ -57,7 +62,7 @@ async function handleListLinks(
   }
 
   const { results } = await env.DB.prepare<VpnLinkRow>(
-    `SELECT id, name, raw_link, created_at, updated_at
+    `SELECT id, name, raw_link, tag, created_at, updated_at
        FROM vpn_links
        ORDER BY created_at DESC`,
   ).all();
@@ -74,7 +79,7 @@ async function handleDeleteLink(
   if (!linkId) return errorResponse('Missing link id', 400);
 
   const link = await env.DB.prepare<VpnLinkRow>(
-    `SELECT id, name, raw_link, created_at, updated_at
+    `SELECT id, name, raw_link, tag, created_at, updated_at
        FROM vpn_links WHERE id = ?`,
   )
     .bind(linkId)
@@ -84,9 +89,7 @@ async function handleDeleteLink(
     return errorResponse('Link not found', 404);
   }
 
-  const deleteResult = await env.DB.prepare(
-    `DELETE FROM vpn_links WHERE id = ?`,
-  )
+  const deleteResult = await env.DB.prepare(`DELETE FROM vpn_links WHERE id = ?`)
     .bind(linkId)
     .run();
 
@@ -108,7 +111,7 @@ async function handleUpdateLink(
   if (!linkId) return errorResponse('Missing link id', 400);
 
   const existing = await env.DB.prepare<VpnLinkRow>(
-    `SELECT id, name, raw_link, created_at, updated_at FROM vpn_links WHERE id = ?`,
+    `SELECT id, name, raw_link, tag, created_at, updated_at FROM vpn_links WHERE id = ?`,
   )
     .bind(linkId)
     .first();
@@ -117,11 +120,16 @@ async function handleUpdateLink(
   const body = await readJsonBody<{
     url?: string;
     name?: string | null;
+    tag?: string | null;
   }>(request);
   if (!body) return errorResponse('Invalid JSON payload', 400);
 
   const rawLink = body.url !== undefined ? body.url.trim() : existing.raw_link;
   if (!rawLink) return errorResponse('`url` is required', 422);
+  if (body.tag != null && typeof body.tag !== 'string')
+    return errorResponse('`tag` must be a string', 422);
+  const tag = body.tag === undefined ? existing.tag : body.tag?.trim() || null;
+  if (tag && tag.length > 64) return errorResponse('`tag` must be at most 64 characters', 422);
 
   let name: string;
   if (body.name !== undefined) {
@@ -136,9 +144,9 @@ async function handleUpdateLink(
   }
 
   const update = await env.DB.prepare(
-    `UPDATE vpn_links SET name = ?, raw_link = ?, updated_at = strftime('%s','now') WHERE id = ?`,
+    `UPDATE vpn_links SET name = ?, raw_link = ?, tag = ?, updated_at = strftime('%s','now') WHERE id = ?`,
   )
-    .bind(name, rawLink, linkId)
+    .bind(name, rawLink, tag, linkId)
     .run();
 
   if (!update.success) {
@@ -147,7 +155,7 @@ async function handleUpdateLink(
   }
 
   const updated = await env.DB.prepare<VpnLinkRow>(
-    `SELECT id, name, raw_link, created_at, updated_at FROM vpn_links WHERE id = ?`,
+    `SELECT id, name, raw_link, tag, created_at, updated_at FROM vpn_links WHERE id = ?`,
   )
     .bind(linkId)
     .first();
