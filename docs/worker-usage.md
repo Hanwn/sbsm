@@ -47,6 +47,7 @@ npm run deploy
 - `POST /api/groups` – create a manual group (`{ name, description?, linkIds?, tagNames? }`).
 - `POST /api/groups` with `type: "subscription"` also accepts an optional single `tag` alongside `subscriptionUrl`.
 - `GET /api/groups` – list groups.
+- `DELETE /api/groups/:id` – delete a group and detach it from rendered configs; stored VPN nodes remain.
 - `PUT /api/groups/:id/subscription` – update a subscription group, including `tag` (`null` or `""` clears it).
 - `PUT /api/groups/:id/tags` – replace a manual group's tag selection (`{ tagNames: [] }`).
 - `POST /api/groups/:id/links` – attach links (`{ linkIds: [] }`).

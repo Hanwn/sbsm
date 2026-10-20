@@ -2,6 +2,16 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -143,6 +153,7 @@ export default function GroupsPage() {
   );
   const [subscriptionSubmitting, setSubscriptionSubmitting] = useState(false);
   const [refreshingSubscriptionId, setRefreshingSubscriptionId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<VpnGroup | null>(null);
 
   const sortedGroups = useMemo(
     () => [...groups].sort((a, b) => b.created_at - a.created_at),
@@ -500,6 +511,31 @@ export default function GroupsPage() {
     }
   }
 
+  async function handleDeleteGroup() {
+    if (!deleteTarget) return;
+    const group = deleteTarget;
+    try {
+      await apiFetch(`/api/groups/${group.id}`, { method: "DELETE" });
+      setGroups((previous) => previous.filter((item) => item.id !== group.id));
+      setEditGroupId((previous) => (previous === group.id ? null : previous));
+      setSubscriptionTarget((previous) => (previous?.id === group.id ? null : previous));
+      setAlert({
+        type: "success",
+        title: "Group deleted",
+        message: `${group.name} was removed from VPN groups and rendered configs.`,
+      });
+    } catch (error) {
+      console.error("Failed to delete group", error);
+      setAlert({
+        type: "error",
+        title: "Failed to delete group",
+        message: error instanceof Error ? error.message : "Unexpected error deleting the group.",
+      });
+    } finally {
+      setDeleteTarget(null);
+    }
+  }
+
   return (
     <div className="flex flex-1 flex-col">
       <header className="flex h-16 items-center gap-2 border-b bg-background px-4">
@@ -822,150 +858,161 @@ export default function GroupsPage() {
                             {new Date(group.created_at * 1000).toLocaleString()}
                           </TableCell>
                           <TableCell className="text-right">
-                            {group.type === "manual" ? (
-                              <Dialog
-                                open={editGroupId === group.id}
-                                onOpenChange={(open) => {
-                                  if (open) {
-                                    setEditGroupId(group.id);
-                                    setEditSelection(new Set(group.link_ids ?? []));
-                                    setEditTagSelection(new Set(group.tag_names ?? []));
-                                  } else if (editGroupId === group.id) {
-                                    setEditGroupId(null);
-                                    setEditSelection(new Set());
-                                    setEditTagSelection(new Set());
-                                    setEditSubmitting(false);
-                                  }
-                                }}
-                              >
-                                <DialogTrigger asChild>
-                                  <Button variant="outline" size="sm">
-                                    Edit nodes and tags
-                                  </Button>
-                                </DialogTrigger>
-                                <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
-                                  <DialogHeader>
-                                    <DialogTitle>Edit nodes and tags for {group.name}</DialogTitle>
-                                    <DialogDescription>
-                                      Select tags for automatic membership and individual nodes for
-                                      direct membership.
-                                    </DialogDescription>
-                                  </DialogHeader>
-                                  <form
-                                    className="flex flex-col gap-4"
-                                    onSubmit={(event) => handleUpdateGroupLinks(event, group)}
-                                  >
-                                    <div className="space-y-2">
-                                      <Label>Include tags</Label>
-                                      <div className="max-h-32 overflow-y-auto rounded-lg border p-3">
-                                        {availableTags.length === 0 ? (
-                                          <p className="text-sm text-muted-foreground">
-                                            No tags available.
-                                          </p>
-                                        ) : (
-                                          availableTags.map((tag) => (
-                                            <label
-                                              key={tag}
-                                              className="flex items-center gap-2 py-1 text-sm"
-                                            >
-                                              <Checkbox
-                                                checked={editTagSelection.has(tag)}
-                                                onCheckedChange={() =>
-                                                  toggleTagSelection(tag, true)
-                                                }
-                                                disabled={editSubmitting}
-                                              />
-                                              <span>{tag}</span>
-                                            </label>
-                                          ))
-                                        )}
-                                      </div>
-                                    </div>
-                                    <Label>Specific VPN nodes</Label>
-                                    <p className="text-xs text-muted-foreground">
-                                      Nodes matching a selected tag remain included even when
-                                      unchecked here.
-                                    </p>
-                                    <div className="max-h-60 overflow-y-auto rounded-lg border p-3">
-                                      {links.length === 0 ? (
-                                        <p className="text-sm text-muted-foreground">
-                                          No VPN nodes available. Add nodes first.
-                                        </p>
-                                      ) : (
+                            <div className="flex flex-wrap justify-end gap-2">
+                              {group.type === "manual" ? (
+                                <Dialog
+                                  open={editGroupId === group.id}
+                                  onOpenChange={(open) => {
+                                    if (open) {
+                                      setEditGroupId(group.id);
+                                      setEditSelection(new Set(group.link_ids ?? []));
+                                      setEditTagSelection(new Set(group.tag_names ?? []));
+                                    } else if (editGroupId === group.id) {
+                                      setEditGroupId(null);
+                                      setEditSelection(new Set());
+                                      setEditTagSelection(new Set());
+                                      setEditSubmitting(false);
+                                    }
+                                  }}
+                                >
+                                  <DialogTrigger asChild>
+                                    <Button variant="outline" size="sm">
+                                      Edit nodes
+                                    </Button>
+                                  </DialogTrigger>
+                                  <DialogContent className="flex max-h-[80dvh] max-w-2xl flex-col overflow-hidden">
+                                    <DialogHeader>
+                                      <DialogTitle>Edit nodes for {group.name}</DialogTitle>
+                                      <DialogDescription>
+                                        Choose individual nodes or include nodes by their tag.
+                                      </DialogDescription>
+                                    </DialogHeader>
+                                    <form
+                                      className="flex min-h-0 flex-1 flex-col gap-4"
+                                      onSubmit={(event) => handleUpdateGroupLinks(event, group)}
+                                    >
+                                      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
                                         <div className="space-y-2">
-                                          {links.map((link) => {
-                                            const displayName = link.name?.length
-                                              ? link.name
-                                              : "Unnamed node";
-                                            return (
-                                              <label
-                                                key={link.id}
-                                                className="flex items-start gap-2 text-sm"
-                                              >
-                                                <Checkbox
-                                                  checked={editSelection.has(link.id)}
-                                                  onCheckedChange={() =>
-                                                    toggleEditSelection(link.id)
-                                                  }
-                                                  disabled={editSubmitting}
-                                                />
-                                                <span className="flex flex-col">
-                                                  <span className="font-medium leading-none">
-                                                    {displayName} ·{" "}
-                                                    {getLinkProtocolLabel(link.raw_link)}
-                                                  </span>
-                                                  <span className="text-xs font-mono text-muted-foreground break-all">
-                                                    {link.raw_link}
-                                                  </span>
-                                                </span>
-                                              </label>
-                                            );
-                                          })}
+                                          <Label>Include nodes by tag</Label>
+                                          <div className="rounded-lg border p-3">
+                                            {availableTags.length === 0 ? (
+                                              <p className="text-sm text-muted-foreground">
+                                                No tags available.
+                                              </p>
+                                            ) : (
+                                              availableTags.map((tag) => (
+                                                <label
+                                                  key={tag}
+                                                  className="flex items-center gap-2 py-1 text-sm"
+                                                >
+                                                  <Checkbox
+                                                    checked={editTagSelection.has(tag)}
+                                                    onCheckedChange={() =>
+                                                      toggleTagSelection(tag, true)
+                                                    }
+                                                    disabled={editSubmitting}
+                                                  />
+                                                  <span>{tag}</span>
+                                                </label>
+                                              ))
+                                            )}
+                                          </div>
                                         </div>
-                                      )}
-                                    </div>
-                                    <DialogFooter>
-                                      <Button
-                                        type="button"
-                                        variant="outline"
-                                        onClick={() => {
-                                          setEditGroupId(null);
-                                          setEditSelection(new Set());
-                                          setEditTagSelection(new Set());
-                                          setEditSubmitting(false);
-                                        }}
-                                        disabled={editSubmitting}
-                                      >
-                                        Cancel
-                                      </Button>
-                                      <Button type="submit" disabled={editSubmitting}>
-                                        {editSubmitting ? "Saving…" : "Save changes"}
-                                      </Button>
-                                    </DialogFooter>
-                                  </form>
-                                </DialogContent>
-                              </Dialog>
-                            ) : (
-                              <div className="flex flex-wrap justify-end gap-2">
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => openSubscriptionDialog(group)}
-                                >
-                                  Edit subscription
-                                </Button>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => handleRefreshSubscription(group)}
-                                  disabled={refreshingSubscriptionId === group.id}
-                                >
-                                  {refreshingSubscriptionId === group.id
-                                    ? "Refreshing…"
-                                    : "Refresh"}
-                                </Button>
-                              </div>
-                            )}
+                                        <Label>Specific VPN nodes</Label>
+                                        <p className="text-xs text-muted-foreground">
+                                          Nodes matching a selected tag remain included even when
+                                          unchecked here.
+                                        </p>
+                                        <div className="rounded-lg border p-3">
+                                          {links.length === 0 ? (
+                                            <p className="text-sm text-muted-foreground">
+                                              No VPN nodes available. Add nodes first.
+                                            </p>
+                                          ) : (
+                                            <div className="space-y-2">
+                                              {links.map((link) => {
+                                                const displayName = link.name?.length
+                                                  ? link.name
+                                                  : "Unnamed node";
+                                                return (
+                                                  <label
+                                                    key={link.id}
+                                                    className="flex items-start gap-2 text-sm"
+                                                  >
+                                                    <Checkbox
+                                                      checked={editSelection.has(link.id)}
+                                                      onCheckedChange={() =>
+                                                        toggleEditSelection(link.id)
+                                                      }
+                                                      disabled={editSubmitting}
+                                                    />
+                                                    <span className="flex flex-col">
+                                                      <span className="font-medium leading-none">
+                                                        {displayName} ·{" "}
+                                                        {getLinkProtocolLabel(link.raw_link)}
+                                                        {link.tag ? ` · ${link.tag}` : ""}
+                                                      </span>
+                                                      <span className="text-xs font-mono text-muted-foreground break-all">
+                                                        {link.raw_link}
+                                                      </span>
+                                                    </span>
+                                                  </label>
+                                                );
+                                              })}
+                                            </div>
+                                          )}
+                                        </div>
+                                      </div>
+                                      <DialogFooter>
+                                        <Button
+                                          type="button"
+                                          variant="outline"
+                                          onClick={() => {
+                                            setEditGroupId(null);
+                                            setEditSelection(new Set());
+                                            setEditTagSelection(new Set());
+                                            setEditSubmitting(false);
+                                          }}
+                                          disabled={editSubmitting}
+                                        >
+                                          Cancel
+                                        </Button>
+                                        <Button type="submit" disabled={editSubmitting}>
+                                          {editSubmitting ? "Saving…" : "Save changes"}
+                                        </Button>
+                                      </DialogFooter>
+                                    </form>
+                                  </DialogContent>
+                                </Dialog>
+                              ) : (
+                                <div className="flex flex-wrap justify-end gap-2">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => openSubscriptionDialog(group)}
+                                  >
+                                    Edit subscription
+                                  </Button>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => handleRefreshSubscription(group)}
+                                    disabled={refreshingSubscriptionId === group.id}
+                                  >
+                                    {refreshingSubscriptionId === group.id
+                                      ? "Refreshing…"
+                                      : "Refresh"}
+                                  </Button>
+                                </div>
+                              )}
+                              <Button
+                                variant="destructive"
+                                size="sm"
+                                onClick={() => setDeleteTarget(group)}
+                              >
+                                Delete
+                              </Button>
+                            </div>
                           </TableCell>
                         </TableRow>
                       );
@@ -1099,6 +1146,31 @@ export default function GroupsPage() {
           )}
         </DialogContent>
       </Dialog>
+      <AlertDialog
+        open={Boolean(deleteTarget)}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {deleteTarget?.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This removes the group and detaches it from rendered configs. Stored VPN nodes remain
+              available.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              onClick={() => void handleDeleteGroup()}
+            >
+              Delete group
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

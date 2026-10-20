@@ -182,6 +182,27 @@ async function handleListGroups(
   return jsonResponse(payload);
 }
 
+async function handleDeleteGroup(
+  _request: Request,
+  env: Env,
+  params: Record<string, string>,
+  _auth: AuthContext,
+): Promise<Response> {
+  const groupId = params.id;
+  if (!groupId) return errorResponse('Missing group id', 400);
+
+  const group = await fetchGroupById(env, groupId);
+  if (!group) return errorResponse('Group not found', 404);
+
+  const result = await env.DB.prepare(`DELETE FROM vpn_groups WHERE id = ?`).bind(groupId).run();
+  if (!result.success) {
+    console.error('Failed to delete vpn_group', result.error);
+    return errorResponse('Failed to delete group', 500);
+  }
+
+  return jsonResponse({ success: true });
+}
+
 async function handleAddGroupLinks(
   request: Request,
   env: Env,
@@ -517,6 +538,11 @@ export const groupRoutes: RouteDefinition[] = [
     method: 'GET',
     pattern: new URLPattern({ pathname: '/api/groups' }),
     handler: requireAuth(handleListGroups),
+  },
+  {
+    method: 'DELETE',
+    pattern: new URLPattern({ pathname: '/api/groups/:id' }),
+    handler: requireAuth(handleDeleteGroup),
   },
   {
     method: 'POST',

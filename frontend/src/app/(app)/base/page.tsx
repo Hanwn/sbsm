@@ -467,9 +467,12 @@ export default function BaseConfigsPage() {
                           {new Date(config.updated_at * 1000).toLocaleString()}
                         </TableCell>
                         <TableCell className="text-right">
-                          <div className="flex justify-end">
+                          <div className="flex justify-end gap-2">
                             <Button variant="outline" size="sm" onClick={() => openEditDialog(config)}>
                               Edit
+                            </Button>
+                            <Button variant="destructive" size="sm" onClick={() => setDeleteTarget(config)}>
+                              Delete
                             </Button>
                           </div>
                         </TableCell>
@@ -562,19 +565,6 @@ export default function BaseConfigsPage() {
                 className="h-56 resize-y font-mono text-xs"
               />
             </div>
-            <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-4">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <p className="text-sm font-medium text-destructive">Delete base config</p>
-                  <p className="text-xs text-muted-foreground">
-                    This removes the template. Configs referencing it must be updated manually.
-                  </p>
-                </div>
-                <Button type="button" variant="destructive" onClick={() => setDeleteTarget(editTarget)}>
-                  Delete
-                </Button>
-              </div>
-            </div>
             <DialogFooter>
               <Button
                 type="button"
@@ -605,7 +595,7 @@ export default function BaseConfigsPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete {deleteTarget?.name}?</AlertDialogTitle>
             <AlertDialogDescription>
-              This action removes the base template. Configs referencing it must be updated manually.
+              This removes the template. Templates used by rendered configs cannot be deleted.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
