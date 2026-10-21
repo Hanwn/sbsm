@@ -84,6 +84,8 @@ export default function BaseConfigsPage() {
   const [createVersion, setCreateVersion] = useState<"1.12" | "1.13" | "1.14">("1.12");
   const [createConfigJson, setCreateConfigJson] = useState(EMPTY_TEMPLATE);
   const [createFileError, setCreateFileError] = useState("");
+  const [createRemoteUrl, setCreateRemoteUrl] = useState("");
+  const [fetchingRemote, setFetchingRemote] = useState(false);
   const [createRules, setCreateRules] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
 
@@ -138,6 +140,8 @@ export default function BaseConfigsPage() {
     setCreateVersion("1.12");
     setCreateConfigJson(EMPTY_TEMPLATE);
     setCreateFileError("");
+    setCreateRemoteUrl("");
+    setFetchingRemote(false);
     setCreateRules({});
   }
 
@@ -201,6 +205,35 @@ export default function BaseConfigsPage() {
       setError("");
     } catch (error) {
       setError(error instanceof Error ? error.message : "Could not read the JSON file.");
+    }
+  }
+
+  async function loadRemoteConfig(): Promise<void> {
+    setCreateFileError("");
+    let url: URL;
+    try {
+      url = new URL(createRemoteUrl.trim());
+      if (url.protocol !== "https:" && url.protocol !== "http:") {
+        throw new Error("Use an HTTP or HTTPS URL.");
+      }
+    } catch (error) {
+      setCreateFileError(error instanceof Error ? error.message : "Enter a valid URL.");
+      return;
+    }
+
+    setFetchingRemote(true);
+    try {
+      const response = await fetch(url, { headers: { Accept: "application/json" } });
+      if (!response.ok) throw new Error(`Remote server returned HTTP ${response.status}.`);
+      const parsed: unknown = await response.json();
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("The URL must return a JSON object.");
+      }
+      setCreateConfigJson(JSON.stringify(parsed, null, 2));
+    } catch (error) {
+      setCreateFileError(error instanceof Error ? error.message : "Could not fetch JSON from that URL.");
+    } finally {
+      setFetchingRemote(false);
     }
   }
 
@@ -431,6 +464,15 @@ export default function BaseConfigsPage() {
                       event.currentTarget.value = "";
                       if (file) void loadConfigFile(file, setCreateConfigJson, setCreateFileError);
                     }} />
+                  <Label htmlFor="base-config-url">Or fetch from a URL</Label>
+                  <div className="flex gap-2">
+                    <Input id="base-config-url" type="url" placeholder="https://example.com/config.json"
+                      value={createRemoteUrl} onChange={(event) => setCreateRemoteUrl(event.target.value)} />
+                    <Button type="button" variant="outline" disabled={fetchingRemote || !createRemoteUrl.trim()}
+                      onClick={() => void loadRemoteConfig()}>
+                      {fetchingRemote ? "Fetching…" : "Fetch"}
+                    </Button>
+                  </div>
                   {createFileError && <p role="alert" className="text-xs text-destructive">{createFileError}</p>}
                 </div>
                 <DialogFooter>
